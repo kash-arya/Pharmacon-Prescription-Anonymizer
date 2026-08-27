@@ -1,0 +1,126 @@
+PHARMACON — HANDWRITING SAMPLE SHEETS
+=====================================
+
+WHAT THIS IS (read once — 30 seconds)
+-------------------------------------
+This is for a student software-engineering project on digitising handwritten
+prescriptions. The system will learn your handwriting so it can read
+prescriptions more accurately.
+
+Time needed: about 15-20 minutes. Your samples are used only for this
+academic project. No patient information is collected.
+
+
+HOW TO WRITE (read carefully — these rules matter)
+--------------------------------------------------
+1. Use RULED / LINED paper (like a notebook). Not blank paper.
+2. Write ONLY the numbered items below, ONE LINE per item.
+3. Do NOT write section titles (like "Sheet 1" or "Characters"). Write only
+   the items themselves.
+4. Leave a clear, consistent gap between lines. Do not crowd them.
+5. Write in the exact order given. Do not skip, merge, or split lines.
+6. Do not add your own examples. Copy each item exactly as printed.
+7. Use a pen, in your normal handwriting.
+
+
+PARTICIPANT DETAILS (write this first, at the very top of the page)
+-------------------------------------------------------------------
+Full name: ______________________________
+Qualification: __________________________
+Medical Council / Pharmacy Council registration no.: ________
+Date: __________________________________
+
+Write the details above, then leave a blank gap, then write the sample items
+below, one per line, starting with line 1.
+
+
+SECTION 1 — CHARACTERS AND NUMBERS
+(Write only the items, one line each, in this exact order.)
+
+1. A B C D E F G H I J
+2. K L M N O P Q R S T
+3. U V W X Y Z
+4. a b c d e f g h i j
+5. k l m n o p q r s t
+6. u v w x y z
+7. 0 1 2 3 4 5 6 7 8 9
+
+
+SECTION 2 — MEDICAL SHORTHAND, UNITS AND FORMS
+(Write only the items, one line each, in this exact order.)
+
+8. OD BD TDS QID
+9. HS AC PC SOS PRN stat
+10. 1-0-1 1-0-0 0-1-0 0-0-1 1-1-1 1-1-0 0-1-1
+11. once daily twice a day three times a day at bedtime as needed
+12. empty stomach with food after food before food after breakfast at night
+13. Tab Cap Syp Susp Inj Oint Cream Gel Drop Inhaler Patch
+14. IM IV PO
+15. mg mcg ml gm IU tsp tbsp drop puff
+16. 500 250 100 50 40 20 10 5 2.5
+
+
+SECTION 3 — FULL PRESCRIPTION LINES(separate page)
+(Write in this exact order including the numbering.)
+
+17. Tab. Paracetamol 500mg 1-1-1 PC
+18. Tab. Amoxicillin 500mg 1-1-1 PC x 5 days
+19. Tab. Azithromycin 500mg 1-0-0 AC x 3 days
+20. Tab. Metformin 500mg 1-0-1 PC
+21. Tab. Amlodipine 5mg 1-0-0 AC
+22. Tab. Telmisartan 40mg 1-0-0 AC
+23. Tab. Losartan 50mg 1-0-0 AC
+24. Tab. Atenolol 50mg 1-0-0 AC
+25. Tab. Metoprolol 50mg 1-0-1 PC
+26. Tab. Atorvastatin 10mg 0-0-1 HS
+27. Tab. Rosuvastatin 10mg 0-0-1 HS
+28. Tab. Levothyroxine 50mcg 1-0-0 AC
+29. Cap. Omeprazole 20mg 1-0-0 AC
+30. Tab. Pantoprazole 40mg 1-0-0 AC
+31. Tab. Famotidine 20mg 1-0-1 PC
+32. Tab. Cetirizine 10mg 0-0-1 HS
+33. Tab. Levocetirizine 5mg 0-0-1 HS
+34. Tab. Montelukast 10mg 0-0-1 HS
+35. Tab. Ibuprofen 400mg 1-1-1 PC
+36. Tab. Diclofenac 50mg 1-1-1 PC
+37. Tab. Ciprofloxacin 500mg 1-0-1 PC x 5 days
+38. Cap. Doxycycline 100mg 1-0-1 PC x 7 days
+39. Tab. Iron + Folic Acid 1-0-0 PC
+40. Tab. Calcium 500mg + Vit D3 0-0-1 PC
+41. Syp. Paracetamol 250mg/5ml 2 tsp 1-1-1 PC
+42. Syp. Azithromycin 200mg/5ml 2 tsp 1-0-0 AC x 3 days
+43. Tab. Aspirin 75mg 1-0-0 PC
+44. Tab. Folic Acid 5mg 1-0-0 PC
+45. Tab. Vitamin B Complex 1-0-0 PC
+46. Cap. Tramadol 50mg SOS
+
+
+HELD-OUT SET (separate page — Write in this exact order including the numbering)
+(These are medicines not in the sections above.)
+------------------------------------------------------------------
+
+1. Tab. Glimepiride 2mg 1-0-0 AC
+2. Tab. Vildagliptin 50mg 1-0-1 PC
+3. Tab. Ramipril 5mg 1-0-0 AC
+4. Tab. Clopidogrel 75mg 1-0-0 PC
+5. Tab. Warfarin 5mg 0-0-1 HS
+6. Tab. Digoxin 0.25mg 1-0-0 AC
+7. Tab. Furosemide 40mg 1-0-0 AC
+8. Tab. Hydrochlorothiazide 25mg 1-0-0 AC
+9. Tab. Spironolactone 25mg 1-0-0 AC
+10. Tab. Prednisolone 5mg 1-0-0 AC
+11. Tab. Carbamazepine 200mg 1-0-1 PC
+12. Tab. Sodium Valproate 500mg 1-0-1 PC
+13. Tab. Phenytoin 100mg 1-0-1 PC
+14. Tab. Allopurinol 100mg 1-0-0 PC
+15. Tab. Febuxostat 40mg 1-0-0 PC
+16. Tab. Ondansetron 4mg 1-1-1 PC
+17. Tab. Domperidone 10mg 1-1-1 AC
+18. Tab. Metoclopramide 10mg 1-1-1 AC
+19. Tab. Gabapentin 300mg 1-0-1 PC
+20. Tab. Pregabalin 75mg 1-0-1 PC
+21. Tab. Amitriptyline 25mg 0-0-1 HS
+22. Cap. Fluconazole 150mg 1-0-0 PC
+23. Tab. Albendazole 400mg 1-0-0 PC x 1 day
+24. Tab. Cotrimoxazole 960mg 1-0-1 PC x 5 days
+25. Syp. Amoxicillin 125mg/5ml 1 tsp 1-1-1 PC x 5 days
