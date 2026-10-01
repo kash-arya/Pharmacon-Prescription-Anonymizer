@@ -1,0 +1,85 @@
+# ===================================================================
+# Python Bytecode & Runtime Cache
+# ===================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# ===================================================================
+# Virtual Environments & Packages
+# ===================================================================
+.venv/
+venv/
+env/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# ===================================================================
+# IDEs & Local Tool Configurations
+# ===================================================================
+.commandcode/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ===================================================================
+# Jupyter & Colab Artifacts
+# ===================================================================
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+
+# ===================================================================
+# Machine Learning Weights & Checkpoints (Prevent GitHub 100MB Block)
+# ===================================================================
+adapters/
+checkpoints/
+models/
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.onnx
+
+# ===================================================================
+# Raw Image Dumps & Temporary Crops (Prevents Repo Bloat)
+# ===================================================================
+sheet_photos/
+crops/
+test_crops/
+*.zip
+*.tar.gz
+*.tar
+*.7z
+
+# ===================================================================
+# OS & File System Artifacts
+# ===================================================================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===================================================================
+# Environment Variables & Sensitive Credentials
+# ===================================================================
+.env
+*.token
+*.pem
+*.key
