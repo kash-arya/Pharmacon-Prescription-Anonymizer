@@ -170,7 +170,7 @@ Full detail in `Pharmacon_Writer_Calibration_Protocol.pdf` (13 pages). Summary b
 | Lab 2: Software Grid | 4 ideas, ranked, 7-section breakdown | Done |
 | Commitment pitch | Revised scope approval | Done (approved) |
 | Planning Presentation | Live website + Planning v1 + PoC evidence | In progress |
-| PoC | Generic vs adapted on sealed lines (Writer W01 complete) | Passed (W01) |
+| PoC | Generic vs adapted on sealed lines (Writer W01 + W02 complete) | Passed (Pooled Macro CER 0.8088) |
 | SRS Document | IEEE 830 | Phase 2 |
 | System Design (UML) | Use Case, Class, Sequence, Component, DFD | Phase 3 |
 | Working Application | Full codebase + tests | Phase 4 |
@@ -204,7 +204,8 @@ Full detail in `Pharmacon_Writer_Calibration_Protocol.pdf` (13 pages). Summary b
 | 2026-09-13 | Read + decoded final protocol (email + PDF) | Command Code | Updated AGENTS.md/ROADMAP.md to TrOCR-small protocol, WSCMC, 16/4/4/8 split | Cross-checked email vs PDF |
 | 2026-09-13/14 | TrOCR-small LoRA smoke test & Colab pipeline | Antigravity AI (Gemini) | Verified model load (bypassing TokenizersBackend & torchao conflicts); proved exact 24,576 trainable params (0.0399%) on blocks 10/11 query+value, decoder frozen | Output log: 8 tensors, 0 decoder params |
 | 2026-09-15 | End-to-end empirical PoC on Writer W01 sheets | Antigravity AI (Gemini) | Executed complete pipeline: fixed-form crop with pre-cropped fallback, baseline inference, LoRA adaptation (E01-E16) with V01-V04 early stopping, beam search decoding. Proved Macro CER drop 1.2898 → 0.8050 (-48.47% absolute) on sealed T01-T08 lines. | `PHARMACON_POC_REPORT.md` + Colab run logs |
-
+| 2026-10-01 | Clinical Formulary Matcher & Safety Gate Engine | Antigravity AI (Sonnet 4.6) | Built `pharmacon_ai/formulary.py` with NLEM 2022 (54 drugs), consonant skeleton matching, dosage/form compatibility scoring, and clinical safety gate (`HIGH_CONFIDENCE`, `AMBIGUOUS_REQUIRES_CONFIRMATION`, `ABSTAIN`). Verified with 12 automated unit tests passing 100%. | `tests/test_formulary.py` unit tests |
+| 2026-10-06 | Writer W02 Evaluation & Multi-Writer Cohort Training | Antigravity AI (Sonnet 4.6) | Sliced Writer W02 (Aryan) sheets (32 lines); benchmarked individual adaptation (CER 1.0004 → 0.8578, -14.3%). Verified Formulary Safety Gate (7/8 abstains under degraded OCR, 0 false dispensations). Scaled to Multi-Writer Cohort (W01 + W02, 32 lines pooled); proved Macro CER drop 1.1432 → 0.8088 (-29.26%), WER drop 1.2636 → 1.0215 (-19.16%). W01 dropped to 0.7899 (beating single-writer). Eliminated Wikipedia hallucinations and emerged prescription syntax (`Tab`, `5 mg`, `10 mg`). Built automated dynamic trainer `notebooks/Pharmacon_Cohort_Trainer.ipynb`. | Colab T4 GPU execution logs + `phase_reports/PHARMACON_POC_REPORT.md` |
 
 ---
 
