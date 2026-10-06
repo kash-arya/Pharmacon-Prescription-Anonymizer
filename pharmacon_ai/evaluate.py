@@ -16,8 +16,6 @@ No WSCMC, no structured extraction (those are Phase 2).
 
 from __future__ import annotations
 
-import torch
-
 
 # ---------------------------------------------------------------------------
 # Levenshtein edit distance (pure Python, no extra deps)

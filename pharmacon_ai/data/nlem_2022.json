@@ -1,0 +1,1426 @@
+[
+  {
+    "generic_name": "Paracetamol",
+    "category": "Analgesics and Antipyretics",
+    "allowed_forms": [
+      "Tab",
+      "Tablet",
+      "Syp",
+      "Syrup",
+      "Inj",
+      "Injection",
+      "Drops",
+      "Suppository"
+    ],
+    "allowed_strengths": [
+      "125 mg",
+      "250 mg",
+      "500 mg",
+      "650 mg",
+      "1000 mg",
+      "150 mg/mL",
+      "120 mg/5 mL",
+      "250 mg/5 mL"
+    ],
+    "common_brands": [
+      "Dolo",
+      "Calpol",
+      "Crocin",
+      "Pacimol",
+      "Sumo L",
+      "Pyrigesic"
+    ],
+    "standard_dosages": [
+      "SOS",
+      "TDS",
+      "QID",
+      "BD"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Analgesics and Antipyretics."
+  },
+  {
+    "generic_name": "Ibuprofen",
+    "category": "Non-Steroidal Anti-inflammatory Drugs",
+    "allowed_forms": [
+      "Tab",
+      "Tablet",
+      "Syp",
+      "Syrup"
+    ],
+    "allowed_strengths": [
+      "200 mg",
+      "400 mg",
+      "600 mg",
+      "100 mg/5 mL"
+    ],
+    "common_brands": [
+      "Brufen",
+      "Ibugesic",
+      "Combiflam"
+    ],
+    "standard_dosages": [
+      "SOS after food",
+      "TDS",
+      "BD"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Non-Steroidal Anti-inflammatory Drugs."
+  },
+  {
+    "generic_name": "Diclofenac",
+    "category": "Non-Steroidal Anti-inflammatory Drugs",
+    "allowed_forms": [
+      "Tab",
+      "Tablet",
+      "Inj",
+      "Injection",
+      "Gel",
+      "Ointment"
+    ],
+    "allowed_strengths": [
+      "50 mg",
+      "75 mg",
+      "100 mg",
+      "75 mg/mL",
+      "1%"
+    ],
+    "common_brands": [
+      "Voveran",
+      "Diclogesic",
+      "Voltaren"
+    ],
+    "standard_dosages": [
+      "BD",
+      "TDS",
+      "SOS"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Non-Steroidal Anti-inflammatory Drugs."
+  },
+  {
+    "generic_name": "Tramadol",
+    "category": "Opioid Analgesics",
+    "allowed_forms": [
+      "Tab",
+      "Tablet",
+      "Cap",
+      "Capsule",
+      "Inj",
+      "Injection"
+    ],
+    "allowed_strengths": [
+      "50 mg",
+      "100 mg",
+      "50 mg/mL"
+    ],
+    "common_brands": [
+      "Tramazac",
+      "Ultram",
+      "Supridol"
+    ],
+    "standard_dosages": [
+      "SOS",
+      "BD"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Opioid Analgesics."
+  },
+  {
+    "generic_name": "Amoxicillin",
+    "category": "Antibacterials",
+    "allowed_forms": [
+      "Cap",
+      "Capsule",
+      "Tab",
+      "Tablet",
+      "Syp",
+      "Syrup",
+      "Dry Syrup"
+    ],
+    "allowed_strengths": [
+      "250 mg",
+      "500 mg",
+      "125 mg/5 mL",
+      "250 mg/5 mL"
+    ],
+    "common_brands": [
+      "Mox",
+      "Novamox",
+      "Amoxil"
+    ],
+    "standard_dosages": [
+      "TDS for 5 days",
+      "BD for 7 days"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Antibacterials."
+  },
+  {
+    "generic_name": "Amoxicillin and Clavulanate",
+    "category": "Antibacterials",
+    "allowed_forms": [
+      "Tab",
+      "Tablet",
+      "Syp",
+      "Syrup",
+      "Inj",
+      "Injection"
+    ],
+    "allowed_strengths": [
+      "375 mg",
+      "625 mg",
+      "1000 mg",
+      "228.5 mg/5 mL",
+      "457 mg/5 mL",
+      "1.2 g"
+    ],
+    "common_brands": [
+      "Augmentin",
+      "Clavam",
+      "Moxikind-CV",
+      "Sensiclav"
+    ],
+    "standard_dosages": [
+      "BD for 5 days",
+      "TDS"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Antibacterials."
+  },
+  {
+    "generic_name": "Azithromycin",
+    "category": "Antibacterials",
+    "allowed_forms": [
+      "Tab",
+      "Tablet",
+      "Syp",
+      "Syrup",
+      "Suspension"
+    ],
+    "allowed_strengths": [
+      "250 mg",
+      "500 mg",
+      "100 mg/5 mL",
+      "200 mg/5 mL"
+    ],
+    "common_brands": [
+      "Azithral",
+      "Azee",
+      "Zithrox",
+      "Azicip"
+    ],
+    "standard_dosages": [
+      "OD for 3 days",
+      "OD for 5 days"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Antibacterials."
+  },
+  {
+    "generic_name": "Cefixime",
+    "category": "Antibacterials",
+    "allowed_forms": [
+      "Tab",
+      "Tablet",
+      "Syp",
+      "Syrup"
+    ],
+    "allowed_strengths": [
+      "100 mg",
+      "200 mg",
+      "400 mg",
+      "50 mg/5 mL",
+      "100 mg/5 mL"
+    ],
+    "common_brands": [
+      "Taxim-O",
+      "Zifi",
+      "Cefolac",
+      "Mahacef"
+    ],
+    "standard_dosages": [
+      "BD for 5 days",
+      "OD for 7 days"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Antibacterials."
+  },
+  {
+    "generic_name": "Ceftriaxone",
+    "category": "Antibacterials",
+    "allowed_forms": [
+      "Inj",
+      "Injection"
+    ],
+    "allowed_strengths": [
+      "250 mg",
+      "500 mg",
+      "1000 mg",
+      "1 g",
+      "2 g"
+    ],
+    "common_brands": [
+      "Monocef",
+      "Oframax",
+      "Zonecef"
+    ],
+    "standard_dosages": [
+      "IV OD",
+      "IV BD"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Antibacterials."
+  },
+  {
+    "generic_name": "Ciprofloxacin",
+    "category": "Antibacterials",
+    "allowed_forms": [
+      "Tab",
+      "Tablet",
+      "Eye drops",
+      "Ear drops",
+      "Inj"
+    ],
+    "allowed_strengths": [
+      "250 mg",
+      "500 mg",
+      "750 mg",
+      "0.3%"
+    ],
+    "common_brands": [
+      "Ciplox",
+      "Cifran",
+      "Ciprobid"
+    ],
+    "standard_dosages": [
+      "BD for 5 days",
+      "BD for 7 days"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Antibacterials."
+  },
+  {
+    "generic_name": "Ofloxacin",
+    "category": "Antibacterials",
+    "allowed_forms": [
+      "Tab",
+      "Tablet",
+      "Eye drops",
+      "Ear drops",
+      "Syp",
+      "Syrup"
+    ],
+    "allowed_strengths": [
+      "100 mg",
+      "200 mg",
+      "400 mg",
+      "0.3%"
+    ],
+    "common_brands": [
+      "Zenflox",
+      "Oflomac",
+      "Tarivid",
+      "Zanocin"
+    ],
+    "standard_dosages": [
+      "BD for 5 days",
+      "OD"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Antibacterials."
+  },
+  {
+    "generic_name": "Doxycycline",
+    "category": "Antibacterials",
+    "allowed_forms": [
+      "Cap",
+      "Capsule",
+      "Tab",
+      "Tablet"
+    ],
+    "allowed_strengths": [
+      "100 mg"
+    ],
+    "common_brands": [
+      "Doxicip",
+      "Doxt-SL",
+      "Microdox"
+    ],
+    "standard_dosages": [
+      "1-0-1 after food for 7 days",
+      "BD for 7 days",
+      "OD"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Antibacterials."
+  },
+  {
+    "generic_name": "Metronidazole",
+    "category": "Antiprotozoal and Antibacterial",
+    "allowed_forms": [
+      "Tab",
+      "Tablet",
+      "Syp",
+      "Syrup",
+      "Inj",
+      "Injection"
+    ],
+    "allowed_strengths": [
+      "200 mg",
+      "400 mg",
+      "200 mg/5 mL",
+      "500 mg/100 mL"
+    ],
+    "common_brands": [
+      "Flagyl",
+      "Metrogyl"
+    ],
+    "standard_dosages": [
+      "TDS for 5 days",
+      "BD"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Antiprotozoal and Antibacterial."
+  },
+  {
+    "generic_name": "Nitrofurantoin",
+    "category": "Antibacterials",
+    "allowed_forms": [
+      "Tab",
+      "Tablet",
+      "Cap",
+      "Capsule"
+    ],
+    "allowed_strengths": [
+      "100 mg"
+    ],
+    "common_brands": [
+      "Uribid",
+      "Martifur",
+      "Niftran"
+    ],
+    "standard_dosages": [
+      "BD for 7 days",
+      "QID"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Antibacterials."
+  },
+  {
+    "generic_name": "Amlodipine",
+    "category": "Antihypertensives",
+    "allowed_forms": [
+      "Tab",
+      "Tablet"
+    ],
+    "allowed_strengths": [
+      "2.5 mg",
+      "5 mg",
+      "10 mg"
+    ],
+    "common_brands": [
+      "Amlopres",
+      "Stamlo",
+      "Amlokind"
+    ],
+    "standard_dosages": [
+      "1-0-0 every morning",
+      "OD morning"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Antihypertensives."
+  },
+  {
+    "generic_name": "Telmisartan",
+    "category": "Antihypertensives",
+    "allowed_forms": [
+      "Tab",
+      "Tablet"
+    ],
+    "allowed_strengths": [
+      "20 mg",
+      "40 mg",
+      "80 mg"
+    ],
+    "common_brands": [
+      "Telma",
+      "Telmikind",
+      "Cresar",
+      "Telsartan"
+    ],
+    "standard_dosages": [
+      "1-0-0",
+      "OD morning"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Antihypertensives."
+  },
+  {
+    "generic_name": "Losartan",
+    "category": "Antihypertensives",
+    "allowed_forms": [
+      "Tab",
+      "Tablet"
+    ],
+    "allowed_strengths": [
+      "25 mg",
+      "50 mg"
+    ],
+    "common_brands": [
+      "Losacar",
+      "Repace",
+      "Zaart"
+    ],
+    "standard_dosages": [
+      "OD",
+      "BD"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Antihypertensives."
+  },
+  {
+    "generic_name": "Enalapril",
+    "category": "Antihypertensives",
+    "allowed_forms": [
+      "Tab",
+      "Tablet"
+    ],
+    "allowed_strengths": [
+      "2.5 mg",
+      "5 mg",
+      "10 mg"
+    ],
+    "common_brands": [
+      "Envas",
+      "Nuril"
+    ],
+    "standard_dosages": [
+      "OD",
+      "BD"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Antihypertensives."
+  },
+  {
+    "generic_name": "Ramipril",
+    "category": "Antihypertensives",
+    "allowed_forms": [
+      "Tab",
+      "Tablet",
+      "Cap",
+      "Capsule"
+    ],
+    "allowed_strengths": [
+      "2.5 mg",
+      "5 mg",
+      "10 mg"
+    ],
+    "common_brands": [
+      "Cardace",
+      "Hopace",
+      "Ramipres"
+    ],
+    "standard_dosages": [
+      "OD morning"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Antihypertensives."
+  },
+  {
+    "generic_name": "Atenolol",
+    "category": "Antihypertensives / Beta Blockers",
+    "allowed_forms": [
+      "Tab",
+      "Tablet"
+    ],
+    "allowed_strengths": [
+      "25 mg",
+      "50 mg",
+      "100 mg"
+    ],
+    "common_brands": [
+      "Aten",
+      "Betacard"
+    ],
+    "standard_dosages": [
+      "OD"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Antihypertensives / Beta Blockers."
+  },
+  {
+    "generic_name": "Metoprolol",
+    "category": "Beta Blockers",
+    "allowed_forms": [
+      "Tab",
+      "Tablet",
+      "SR Tab"
+    ],
+    "allowed_strengths": [
+      "25 mg",
+      "50 mg",
+      "100 mg"
+    ],
+    "common_brands": [
+      "Betaloc",
+      "Metolar",
+      "Mepressor"
+    ],
+    "standard_dosages": [
+      "OD",
+      "BD"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Beta Blockers."
+  },
+  {
+    "generic_name": "Atorvastatin",
+    "category": "Lipid Lowering Medicines",
+    "allowed_forms": [
+      "Tab",
+      "Tablet"
+    ],
+    "allowed_strengths": [
+      "10 mg",
+      "20 mg",
+      "40 mg",
+      "80 mg"
+    ],
+    "common_brands": [
+      "Atorva",
+      "Lipitor",
+      "Storvas",
+      "Tonact",
+      "Atocor"
+    ],
+    "standard_dosages": [
+      "0-0-1",
+      "OD at bedtime"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Lipid Lowering Medicines."
+  },
+  {
+    "generic_name": "Rosuvastatin",
+    "category": "Lipid Lowering Medicines",
+    "allowed_forms": [
+      "Tab",
+      "Tablet"
+    ],
+    "allowed_strengths": [
+      "5 mg",
+      "10 mg",
+      "20 mg",
+      "40 mg"
+    ],
+    "common_brands": [
+      "Rosuvas",
+      "Roseday",
+      "Rozavel"
+    ],
+    "standard_dosages": [
+      "OD bedtime"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Lipid Lowering Medicines."
+  },
+  {
+    "generic_name": "Clopidogrel",
+    "category": "Antiplatelet Medicines",
+    "allowed_forms": [
+      "Tab",
+      "Tablet"
+    ],
+    "allowed_strengths": [
+      "75 mg",
+      "150 mg"
+    ],
+    "common_brands": [
+      "Deplatt",
+      "Clopilet",
+      "Plavix",
+      "Clavix"
+    ],
+    "standard_dosages": [
+      "one tablet OD after lunch",
+      "OD"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Antiplatelet Medicines."
+  },
+  {
+    "generic_name": "Aspirin",
+    "category": "Antiplatelet Medicines",
+    "allowed_forms": [
+      "Tab",
+      "Tablet",
+      "Gastro-resistant Tab"
+    ],
+    "allowed_strengths": [
+      "75 mg",
+      "150 mg",
+      "325 mg"
+    ],
+    "common_brands": [
+      "Ecosprin",
+      "Disprin",
+      "Loprin"
+    ],
+    "standard_dosages": [
+      "OD after food"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Antiplatelet Medicines."
+  },
+  {
+    "generic_name": "Metformin",
+    "category": "Antidiabetic Medicines",
+    "allowed_forms": [
+      "Tab",
+      "Tablet",
+      "SR Tab",
+      "ER Tab"
+    ],
+    "allowed_strengths": [
+      "500 mg",
+      "850 mg",
+      "1000 mg",
+      "SR 500 mg",
+      "SR 1000 mg"
+    ],
+    "common_brands": [
+      "Glycomet",
+      "Glucophage",
+      "Obimet",
+      "Cetapin"
+    ],
+    "standard_dosages": [
+      "1-0-1 with meals for 30 days",
+      "one tablet with the evening meal",
+      "BD with food"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Antidiabetic Medicines."
+  },
+  {
+    "generic_name": "Glimepiride",
+    "category": "Antidiabetic Medicines",
+    "allowed_forms": [
+      "Tab",
+      "Tablet"
+    ],
+    "allowed_strengths": [
+      "1 mg",
+      "2 mg",
+      "3 mg",
+      "4 mg"
+    ],
+    "common_brands": [
+      "Amaryl",
+      "Glimestar",
+      "Zoryl"
+    ],
+    "standard_dosages": [
+      "OD before breakfast"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Antidiabetic Medicines."
+  },
+  {
+    "generic_name": "Gliclazide",
+    "category": "Antidiabetic Medicines",
+    "allowed_forms": [
+      "Tab",
+      "Tablet",
+      "MR Tab"
+    ],
+    "allowed_strengths": [
+      "40 mg",
+      "80 mg",
+      "30 mg",
+      "60 mg"
+    ],
+    "common_brands": [
+      "Diamicron",
+      "Glyciphage",
+      "Reclimet"
+    ],
+    "standard_dosages": [
+      "OD morning"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Antidiabetic Medicines."
+  },
+  {
+    "generic_name": "Insulin",
+    "category": "Antidiabetic Medicines / Hormones",
+    "allowed_forms": [
+      "Inj",
+      "Injection"
+    ],
+    "allowed_strengths": [
+      "40 IU/mL",
+      "100 IU/mL"
+    ],
+    "common_brands": [
+      "Human Mixtard",
+      "Actrapid",
+      "Lantus",
+      "Humalog"
+    ],
+    "standard_dosages": [
+      "10 IU SC before breakfast and 6 IU before dinner",
+      "SC as per sliding scale"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Antidiabetic Medicines / Hormones."
+  },
+  {
+    "generic_name": "Levothyroxine",
+    "category": "Thyroid Hormones",
+    "allowed_forms": [
+      "Tab",
+      "Tablet"
+    ],
+    "allowed_strengths": [
+      "12.5 mcg",
+      "25 mcg",
+      "50 mcg",
+      "62.5 mcg",
+      "75 mcg",
+      "88 mcg",
+      "100 mcg",
+      "125 mcg",
+      "150 mcg"
+    ],
+    "common_brands": [
+      "Thyronorm",
+      "Eltroxin",
+      "Thyrox"
+    ],
+    "standard_dosages": [
+      "once daily before breakfast",
+      "OD empty stomach"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Thyroid Hormones."
+  },
+  {
+    "generic_name": "Pantoprazole",
+    "category": "Gastrointestinal Medicines",
+    "allowed_forms": [
+      "Tab",
+      "Tablet",
+      "Inj",
+      "Injection",
+      "Cap"
+    ],
+    "allowed_strengths": [
+      "20 mg",
+      "40 mg"
+    ],
+    "common_brands": [
+      "Pan",
+      "Pantocid",
+      "Pantodac",
+      "Pantop"
+    ],
+    "standard_dosages": [
+      "1 tablet AC breakfast for 14 days",
+      "OD empty stomach",
+      "BD"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Gastrointestinal Medicines."
+  },
+  {
+    "generic_name": "Omeprazole",
+    "category": "Gastrointestinal Medicines",
+    "allowed_forms": [
+      "Cap",
+      "Capsule",
+      "Tab",
+      "Tablet"
+    ],
+    "allowed_strengths": [
+      "10 mg",
+      "20 mg",
+      "40 mg"
+    ],
+    "common_brands": [
+      "Omez",
+      "Ocid",
+      "Omepral"
+    ],
+    "standard_dosages": [
+      "one capsule before breakfast",
+      "OD AC"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Gastrointestinal Medicines."
+  },
+  {
+    "generic_name": "Rabeprazole",
+    "category": "Gastrointestinal Medicines",
+    "allowed_forms": [
+      "Tab",
+      "Tablet",
+      "Inj"
+    ],
+    "allowed_strengths": [
+      "10 mg",
+      "20 mg"
+    ],
+    "common_brands": [
+      "Razo",
+      "Happi",
+      "Rablet"
+    ],
+    "standard_dosages": [
+      "OD empty stomach"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Gastrointestinal Medicines."
+  },
+  {
+    "generic_name": "Ranitidine",
+    "category": "Gastrointestinal Medicines",
+    "allowed_forms": [
+      "Tab",
+      "Tablet",
+      "Inj"
+    ],
+    "allowed_strengths": [
+      "150 mg",
+      "300 mg",
+      "25 mg/mL"
+    ],
+    "common_brands": [
+      "Rantac",
+      "Aciloc",
+      "Zinetac"
+    ],
+    "standard_dosages": [
+      "BD",
+      "OD at bedtime"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Gastrointestinal Medicines."
+  },
+  {
+    "generic_name": "Ondansetron",
+    "category": "Antiemetics",
+    "allowed_forms": [
+      "Tab",
+      "Tablet",
+      "Syp",
+      "Syrup",
+      "Inj",
+      "Injection"
+    ],
+    "allowed_strengths": [
+      "4 mg",
+      "8 mg",
+      "2 mg/5 mL",
+      "2 mg/mL"
+    ],
+    "common_brands": [
+      "Emeset",
+      "Ondem",
+      "Zofran"
+    ],
+    "standard_dosages": [
+      "SOS",
+      "TDS",
+      "BD"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Antiemetics."
+  },
+  {
+    "generic_name": "Domperidone",
+    "category": "Antiemetics / Prokinetics",
+    "allowed_forms": [
+      "Tab",
+      "Tablet",
+      "Syp",
+      "Syrup",
+      "Drops"
+    ],
+    "allowed_strengths": [
+      "10 mg",
+      "1 mg/mL",
+      "5 mg/5 mL"
+    ],
+    "common_brands": [
+      "Domstal",
+      "Vomidom"
+    ],
+    "standard_dosages": [
+      "TDS before food",
+      "BD"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Antiemetics / Prokinetics."
+  },
+  {
+    "generic_name": "Oral Rehydration Salts",
+    "category": "Electrolytes / Fluids",
+    "allowed_forms": [
+      "ORS",
+      "Sachet",
+      "Solution",
+      "Powder"
+    ],
+    "allowed_strengths": [
+      "21.8 g/L",
+      "20.5 g/L",
+      "200 mL",
+      "1 L"
+    ],
+    "common_brands": [
+      "Electral",
+      "Walyte",
+      "ORSL"
+    ],
+    "standard_dosages": [
+      "200 mL after each loose stool; review if symptoms persist",
+      "ad libitum"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Electrolytes / Fluids."
+  },
+  {
+    "generic_name": "Cetirizine",
+    "category": "Antihistamines",
+    "allowed_forms": [
+      "Tab",
+      "Tablet",
+      "Syp",
+      "Syrup"
+    ],
+    "allowed_strengths": [
+      "5 mg",
+      "10 mg",
+      "5 mg/5 mL"
+    ],
+    "common_brands": [
+      "Cetzine",
+      "Alerid",
+      "Okacet",
+      "Zyrtec"
+    ],
+    "standard_dosages": [
+      "one tablet HS for 7 nights",
+      "10 mL HS for 5 nights",
+      "OD at bedtime"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Antihistamines."
+  },
+  {
+    "generic_name": "Levocetirizine",
+    "category": "Antihistamines",
+    "allowed_forms": [
+      "Tab",
+      "Tablet",
+      "Syp",
+      "Syrup"
+    ],
+    "allowed_strengths": [
+      "2.5 mg",
+      "5 mg",
+      "2.5 mg/5 mL"
+    ],
+    "common_brands": [
+      "Levocet",
+      "Vozet",
+      "T-Levocet"
+    ],
+    "standard_dosages": [
+      "OD at night"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Antihistamines."
+  },
+  {
+    "generic_name": "Budesonide",
+    "category": "Respiratory Medicines / Inhaled Corticosteroids",
+    "allowed_forms": [
+      "Inhaler",
+      "Respules",
+      "Rotacaps",
+      "Nasal Spray"
+    ],
+    "allowed_strengths": [
+      "100 mcg",
+      "200 mcg",
+      "400 mcg",
+      "0.5 mg/2 mL",
+      "1 mg/2 mL"
+    ],
+    "common_brands": [
+      "Budecort",
+      "Pulmicort",
+      "Budetrol"
+    ],
+    "standard_dosages": [
+      "2 puffs BD; rinse after use",
+      "BD"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Respiratory Medicines / Inhaled Corticosteroids."
+  },
+  {
+    "generic_name": "Salbutamol",
+    "category": "Bronchodilators",
+    "allowed_forms": [
+      "Inhaler",
+      "Respules",
+      "Tab",
+      "Tablet",
+      "Syp"
+    ],
+    "allowed_strengths": [
+      "100 mcg",
+      "2 mg",
+      "4 mg",
+      "2 mg/5 mL"
+    ],
+    "common_brands": [
+      "Asthalin",
+      "Ventorlin"
+    ],
+    "standard_dosages": [
+      "2 puffs SOS",
+      "TDS"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Bronchodilators."
+  },
+  {
+    "generic_name": "Montelukast",
+    "category": "Respiratory Medicines",
+    "allowed_forms": [
+      "Tab",
+      "Tablet",
+      "Chewable Tab"
+    ],
+    "allowed_strengths": [
+      "4 mg",
+      "5 mg",
+      "10 mg"
+    ],
+    "common_brands": [
+      "Montair",
+      "Montek",
+      "Telekast"
+    ],
+    "standard_dosages": [
+      "OD at night"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Respiratory Medicines."
+  },
+  {
+    "generic_name": "Quetiapine",
+    "category": "Antipsychotics",
+    "allowed_forms": [
+      "Tab",
+      "Tablet",
+      "SR Tab"
+    ],
+    "allowed_strengths": [
+      "25 mg",
+      "50 mg",
+      "100 mg",
+      "200 mg"
+    ],
+    "common_brands": [
+      "Seroquel",
+      "Qutipin",
+      "Qutan"
+    ],
+    "standard_dosages": [
+      "0-0-1 at bedtime for 14 days",
+      "OD HS"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Antipsychotics."
+  },
+  {
+    "generic_name": "Pregabalin",
+    "category": "Anticonvulsants / Neuropathic Pain",
+    "allowed_forms": [
+      "Cap",
+      "Capsule",
+      "Tab",
+      "Tablet"
+    ],
+    "allowed_strengths": [
+      "50 mg",
+      "75 mg",
+      "150 mg",
+      "300 mg"
+    ],
+    "common_brands": [
+      "Lyrica",
+      "Pregeb",
+      "Pregalin",
+      "Maxgalin"
+    ],
+    "standard_dosages": [
+      "one capsule HS for 10 days",
+      "OD HS",
+      "BD"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Anticonvulsants / Neuropathic Pain."
+  },
+  {
+    "generic_name": "Gabapentin",
+    "category": "Anticonvulsants / Neuropathic Pain",
+    "allowed_forms": [
+      "Tab",
+      "Tablet",
+      "Cap",
+      "Capsule"
+    ],
+    "allowed_strengths": [
+      "100 mg",
+      "300 mg",
+      "400 mg"
+    ],
+    "common_brands": [
+      "Gabapin",
+      "Neurontin"
+    ],
+    "standard_dosages": [
+      "TDS",
+      "OD HS"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Anticonvulsants / Neuropathic Pain."
+  },
+  {
+    "generic_name": "Clonazepam",
+    "category": "Antianxiety / Anticonvulsants",
+    "allowed_forms": [
+      "Tab",
+      "Tablet",
+      "Mouth Dissolving Tab"
+    ],
+    "allowed_strengths": [
+      "0.25 mg",
+      "0.5 mg",
+      "1 mg",
+      "2 mg"
+    ],
+    "common_brands": [
+      "Clona",
+      "Zapiz",
+      "Rivotril",
+      "Lonazep"
+    ],
+    "standard_dosages": [
+      "OD at bedtime",
+      "SOS"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Antianxiety / Anticonvulsants."
+  },
+  {
+    "generic_name": "Escitalopram",
+    "category": "Antidepressants",
+    "allowed_forms": [
+      "Tab",
+      "Tablet"
+    ],
+    "allowed_strengths": [
+      "5 mg",
+      "10 mg",
+      "20 mg"
+    ],
+    "common_brands": [
+      "Nexito",
+      "Cipralex",
+      "Stalopam"
+    ],
+    "standard_dosages": [
+      "OD morning"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Antidepressants."
+  },
+  {
+    "generic_name": "Mupirocin",
+    "category": "Dermatological / Topical Antibiotics",
+    "allowed_forms": [
+      "Ointment",
+      "Cream"
+    ],
+    "allowed_strengths": [
+      "2%"
+    ],
+    "common_brands": [
+      "Bactroban",
+      "T-Bact",
+      "Mupirox",
+      "Supirocin"
+    ],
+    "standard_dosages": [
+      "apply locally TDS for 7 days",
+      "apply BD",
+      "apply TDS"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Dermatological / Topical Antibiotics."
+  },
+  {
+    "generic_name": "Moxifloxacin",
+    "category": "Ophthalmological / Antibacterials",
+    "allowed_forms": [
+      "Eye drops",
+      "Tab",
+      "Tablet"
+    ],
+    "allowed_strengths": [
+      "0.5%",
+      "400 mg"
+    ],
+    "common_brands": [
+      "Vigamox",
+      "Moxicip",
+      "Mahaflox",
+      "Avelox"
+    ],
+    "standard_dosages": [
+      "1 drop QID for 5 days",
+      "1 drop TDS",
+      "OD"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Ophthalmological / Antibacterials."
+  },
+  {
+    "generic_name": "Tobramycin",
+    "category": "Ophthalmological / Antibacterials",
+    "allowed_forms": [
+      "Eye drops",
+      "Eye Ointment",
+      "Inj"
+    ],
+    "allowed_strengths": [
+      "0.3%"
+    ],
+    "common_brands": [
+      "Tobrex",
+      "Tobacin",
+      "Toba"
+    ],
+    "standard_dosages": [
+      "1 drop TDS for 5 days",
+      "1 drop QID"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Ophthalmological / Antibacterials."
+  },
+  {
+    "generic_name": "Carboxymethylcellulose",
+    "category": "Ophthalmological / Artificial Tears",
+    "allowed_forms": [
+      "Eye drops"
+    ],
+    "allowed_strengths": [
+      "0.5%",
+      "1%"
+    ],
+    "common_brands": [
+      "Refresh Tears",
+      "Eco Tears",
+      "Lubrex"
+    ],
+    "standard_dosages": [
+      "1 drop QID",
+      "1 drop TDS"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Ophthalmological / Artificial Tears."
+  },
+  {
+    "generic_name": "Cholecalciferol",
+    "category": "Vitamins / Vitamin D3",
+    "allowed_forms": [
+      "Cap",
+      "Capsule",
+      "Sachet",
+      "Drops",
+      "Syrup"
+    ],
+    "allowed_strengths": [
+      "60,000 IU",
+      "1,000 IU",
+      "400 IU/mL",
+      "800 IU/mL"
+    ],
+    "common_brands": [
+      "Calcirol",
+      "D3 Must",
+      "Uprise-D3",
+      "Depura",
+      "Lumia 60K"
+    ],
+    "standard_dosages": [
+      "once weekly for 8 weeks",
+      "once monthly",
+      "daily"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Vitamins / Vitamin D3."
+  },
+  {
+    "generic_name": "Calcium and Vitamin D3",
+    "category": "Minerals and Vitamins",
+    "allowed_forms": [
+      "Tab",
+      "Tablet",
+      "Syp"
+    ],
+    "allowed_strengths": [
+      "500 mg + 250 IU",
+      "500 mg + 500 IU"
+    ],
+    "common_brands": [
+      "Shelcal",
+      "Gemcal",
+      "Cipcal"
+    ],
+    "standard_dosages": [
+      "1 tablet OD after food",
+      "BD"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Minerals and Vitamins."
+  },
+  {
+    "generic_name": "Folic Acid",
+    "category": "Vitamins / Hematinics",
+    "allowed_forms": [
+      "Tab",
+      "Tablet"
+    ],
+    "allowed_strengths": [
+      "5 mg"
+    ],
+    "common_brands": [
+      "Folvite",
+      "Folinal"
+    ],
+    "standard_dosages": [
+      "OD"
+    ],
+    "nlem_status": true,
+    "clinical_notes": "Approved NLEM formulation for Vitamins / Hematinics."
+  }
+]

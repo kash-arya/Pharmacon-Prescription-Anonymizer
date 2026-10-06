@@ -121,8 +121,10 @@ Then, when 1 writer's sheet arrives: run A vs B vs C on sealed lines and report 
 
 - [x] Build fixed-form crop script (box detection from the protocol PDF).
 - [x] Build TrOCR-small + LoRA adaptation script.
-- [x] Build CER/WER evaluation script.
 - [x] Get 1 writer's filled sheet (Writer W01 evaluated).
 - [x] Run generic vs adapted on sealed lines (Macro CER: 1.29 -> 0.80).
-- [ ] Run active refinement (WSCMC on R01-R04).
-- [ ] Recruit 2 more writers.
+- [x] Integrate NLEM 2022 Formulary Matcher with clinical safety gate.
+- [x] Evaluate Writer W02 (Aryan) individual sanity check (CER: 1.00 -> 0.85).
+- [x] Pool multi-writer cohort (W01 + W02, 32 lines; Pooled Macro CER: 1.14 -> 0.81, WER: 1.26 -> 1.02).
+- [ ] Scale cohort to 5-10 writers using dynamic trainer `notebooks/Pharmacon_Cohort_Trainer.ipynb`.
+- [ ] Active refinement (WSCMC on R01-R04).
