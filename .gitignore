@@ -1,37 +1,22 @@
 # ===================================================================
-# Python Bytecode & Runtime Cache
+# Python Bytecode, Caches & Environments
 # ===================================================================
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .pytest_cache/
-
-# ===================================================================
-# Virtual Environments & Packages
-# ===================================================================
 .venv/
 venv/
 env/
 ENV/
 build/
-develop-eggs/
 dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
-.installed.cfg
-*.egg
+.eggs/
 
 # ===================================================================
-# IDEs & Local Tool Configurations
+# IDEs & Editor Configurations
 # ===================================================================
 .commandcode/
 .vscode/
@@ -41,13 +26,13 @@ wheels/
 *~
 
 # ===================================================================
-# Jupyter & Colab Artifacts
+# Jupyter & Colab Checkpoints
 # ===================================================================
 .ipynb_checkpoints/
 */.ipynb_checkpoints/
 
 # ===================================================================
-# Machine Learning Weights & Checkpoints (Prevent GitHub 100MB Block)
+# Machine Learning Weights & Large Model Checkpoints
 # ===================================================================
 adapters/
 checkpoints/
@@ -59,25 +44,41 @@ models/
 *.onnx
 
 # ===================================================================
-# Raw Image Dumps & Temporary Crops (Prevents Repo Bloat)
+# Local Database Binaries (Auto-initialized by app.py)
 # ===================================================================
-sheet_photos/
+*.db
+*.sqlite
+*.sqlite3
+
+# ===================================================================
+# Raw Image Dumps, Extracted Crops & Uploads (Prevents Repo Bloat)
+# ===================================================================
 crops/
 test_crops/
+sheet_photos/
+dataset/
+data/uploads/
 *.zip
 *.tar.gz
 *.tar
 *.7z
 
 # ===================================================================
-# OS & File System Artifacts
+# Logs & Temporary Files
+# ===================================================================
+*.log
+temp/
+tmp/
+
+# ===================================================================
+# OS & System Artifacts
 # ===================================================================
 .DS_Store
 Thumbs.db
 desktop.ini
 
 # ===================================================================
-# Environment Variables & Sensitive Credentials
+# Sensitive Credentials & Local Environment Files
 # ===================================================================
 .env
 *.token

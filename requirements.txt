@@ -1,0 +1,12 @@
+# Core Deep Learning & Vision (For Model Training & Colab Benchmarking)
+torch>=2.0.0
+transformers>=4.38.0
+peft>=0.10.0
+accelerate>=0.28.0
+pillow>=10.0.0
+opencv-python>=4.8.0
+pymupdf>=1.24.0
+
+# Optional Testing & Visualization
+matplotlib>=3.7.0
+numpy>=1.24.0
