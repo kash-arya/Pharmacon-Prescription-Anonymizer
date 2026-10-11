@@ -1,0 +1,334 @@
+{
+  "project": "Pharmacon \u2014 Writer-Adaptive Prescription OCR",
+  "updated_at": "2026-10-07T01:05:00+05:30",
+  "description": "Historical empirical trajectory across cohort expansion iterations (N=1 to N=4)",
+  "scaling_trajectory": [
+    {
+      "iteration": 1,
+      "cohort_label": "N=1 (W01)",
+      "writers": [
+        "W01"
+      ],
+      "training_lines": 16,
+      "validation_lines": 4,
+      "test_lines": 8,
+      "epochs_run": 40,
+      "best_epoch": 36,
+      "best_val_loss": 7.5367,
+      "final_train_loss": 6.958,
+      "generic_macro_cer": 1.2898,
+      "adapted_macro_cer": 0.805,
+      "cer_relative_reduction_pct": 37.59,
+      "generic_macro_wer": 1.2818,
+      "adapted_macro_wer": 1.075,
+      "wer_relative_reduction_pct": 16.13,
+      "per_writer_adapted_cer": {
+        "W01": 0.805
+      },
+      "safety_gate": {
+        "total_test_lines": 8,
+        "high_confidence_matches": 0,
+        "ambiguous_requires_confirmation": 0,
+        "abstained_lines": 8,
+        "confirmation_rate_pct": 0.0
+      }
+    },
+    {
+      "iteration": 2,
+      "cohort_label": "N=2 (W01+W02)",
+      "writers": [
+        "W01",
+        "W02"
+      ],
+      "training_lines": 32,
+      "validation_lines": 8,
+      "test_lines": 16,
+      "epochs_run": 40,
+      "best_epoch": 40,
+      "best_val_loss": 7.0383,
+      "final_train_loss": 6.4243,
+      "generic_macro_cer": 1.1432,
+      "adapted_macro_cer": 0.8088,
+      "cer_relative_reduction_pct": 29.26,
+      "generic_macro_wer": 1.2636,
+      "adapted_macro_wer": 1.0215,
+      "wer_relative_reduction_pct": 19.16,
+      "per_writer_adapted_cer": {
+        "W01": 0.7899,
+        "W02": 0.8276
+      },
+      "safety_gate": {
+        "total_test_lines": 16,
+        "high_confidence_matches": 0,
+        "ambiguous_requires_confirmation": 0,
+        "abstained_lines": 16,
+        "confirmation_rate_pct": 0.0
+      }
+    },
+    {
+      "iteration": 3,
+      "cohort_label": "N=3 (W01..W03)",
+      "writers": [
+        "W01",
+        "W02",
+        "W03"
+      ],
+      "training_lines": 48,
+      "validation_lines": 12,
+      "test_lines": 24,
+      "epochs_run": 40,
+      "best_epoch": 40,
+      "best_val_loss": 6.9037,
+      "final_train_loss": 6.1062,
+      "generic_macro_cer": 1.069,
+      "adapted_macro_cer": 0.7988,
+      "cer_relative_reduction_pct": 25.28,
+      "generic_macro_wer": 1.2269,
+      "adapted_macro_wer": 1.017,
+      "wer_relative_reduction_pct": 17.1,
+      "per_writer_adapted_cer": {
+        "W01": 0.7463,
+        "W02": 0.8388,
+        "W03": 0.8113
+      },
+      "safety_gate": {
+        "total_test_lines": 24,
+        "high_confidence_matches": 0,
+        "ambiguous_requires_confirmation": 1,
+        "abstained_lines": 23,
+        "confirmation_rate_pct": 4.17
+      }
+    },
+    {
+      "iteration": 4,
+      "cohort_label": "N=4 (W01..W04)",
+      "writers": [
+        "W01",
+        "W02",
+        "W03",
+        "W04"
+      ],
+      "training_lines": 64,
+      "validation_lines": 16,
+      "test_lines": 32,
+      "epochs_run": 40,
+      "best_epoch": 39,
+      "best_val_loss": 6.5385,
+      "final_train_loss": 5.9338,
+      "generic_macro_cer": 1.0519,
+      "adapted_macro_cer": 0.7413,
+      "cer_relative_reduction_pct": 29.53,
+      "generic_macro_wer": 1.1943,
+      "adapted_macro_wer": 0.9568,
+      "wer_relative_reduction_pct": 19.89,
+      "per_writer_adapted_cer": {
+        "W01": 0.7244,
+        "W02": 0.7027,
+        "W03": 0.7666,
+        "W04": 0.7716
+      },
+      "safety_gate": {
+        "total_test_lines": 32,
+        "high_confidence_matches": 0,
+        "ambiguous_requires_confirmation": 11,
+        "abstained_lines": 21,
+        "confirmation_rate_pct": 34.38
+      }
+    },
+    {
+      "iteration": 5,
+      "cohort_label": "N=11 (W01-W11)",
+      "writers": [
+        "W01", "W02", "W03", "W04", "W05", "W06", "W07", "W08", "W09", "W10", "W11"
+      ],
+      "training_lines": 176,
+      "validation_lines": 44,
+      "test_lines": 88,
+      "epochs_run": 21,
+      "best_epoch": 16,
+      "best_val_loss": 6.1697,
+      "final_train_loss": 5.1876,
+      "generic_macro_cer": 1.0057,
+      "adapted_macro_cer": 0.6979,
+      "cer_relative_reduction_pct": 30.60,
+      "generic_macro_wer": 1.4692,
+      "adapted_macro_wer": 0.9312,
+      "wer_relative_reduction_pct": 36.62,
+      "per_writer_adapted_cer": {
+        "W01": 0.7436,
+        "W02": 0.7476,
+        "W03": 0.7546,
+        "W04": 0.6829,
+        "W05": 0.6708,
+        "W06": 0.6809,
+        "W07": 0.6767,
+        "W08": 0.6925,
+        "W09": 0.6555,
+        "W10": 0.6684,
+        "W11": 0.7038
+      },
+      "safety_gate": {
+        "total_test_lines": 88,
+        "high_confidence_matches": 0,
+        "ambiguous_requires_confirmation": 49,
+        "abstained_lines": 39,
+        "confirmation_rate_pct": 55.68
+      }
+    },
+    {
+      "iteration": 6,
+      "cohort_label": "N=13 (W01-W13)",
+      "writers": [
+        "W01", "W02", "W03", "W04", "W05", "W06", "W07", "W08", "W09", "W10", "W11", "W12", "W13"
+      ],
+      "training_lines": 208,
+      "validation_lines": 52,
+      "test_lines": 104,
+      "epochs_run": 21,
+      "best_epoch": 16,
+      "best_val_loss": 6.2830,
+      "final_train_loss": 5.1276,
+      "generic_macro_cer": 1.0105,
+      "adapted_macro_cer": 0.7188,
+      "cer_relative_reduction_pct": 28.87,
+      "generic_macro_wer": 1.4578,
+      "adapted_macro_wer": 0.9840,
+      "wer_relative_reduction_pct": 32.50,
+      "per_writer_adapted_cer": {
+        "W01": 0.7510,
+        "W02": 0.7813,
+        "W03": 0.7203,
+        "W04": 0.7432,
+        "W05": 0.7519,
+        "W06": 0.7024,
+        "W07": 0.7304,
+        "W08": 0.7059,
+        "W09": 0.6655,
+        "W10": 0.6960,
+        "W11": 0.7102,
+        "W12": 0.7140,
+        "W13": 0.6725
+      },
+      "safety_gate": {
+        "total_test_lines": 104,
+        "high_confidence_matches": 0,
+        "ambiguous_requires_confirmation": 30,
+        "abstained_lines": 74,
+        "confirmation_rate_pct": 28.85
+      }
+    },
+    {
+      "iteration": 7,
+      "cohort_label": "N=14 (W01-W14)",
+      "writers": [
+        "W01", "W02", "W03", "W04", "W05", "W06", "W07", "W08", "W09", "W10", "W11", "W12", "W13", "W14"
+      ],
+      "training_lines": 224,
+      "validation_lines": 56,
+      "test_lines": 112,
+      "epochs_run": 25,
+      "best_epoch": 20,
+      "best_val_loss": 6.1258,
+      "final_train_loss": 4.9205,
+      "generic_macro_cer": 1.0080,
+      "adapted_macro_cer": 0.6943,
+      "cer_relative_reduction_pct": 31.12,
+      "generic_macro_wer": 1.4613,
+      "adapted_macro_wer": 0.9670,
+      "wer_relative_reduction_pct": 33.82,
+      "per_writer_adapted_cer": {
+        "W01": 0.7349,
+        "W02": 0.7190,
+        "W03": 0.6837,
+        "W04": 0.6890,
+        "W05": 0.6908,
+        "W06": 0.6779,
+        "W07": 0.6826,
+        "W08": 0.6978,
+        "W09": 0.6887,
+        "W10": 0.6870,
+        "W11": 0.6944,
+        "W12": 0.7011,
+        "W13": 0.6763,
+        "W14": 0.6966
+      },
+      "safety_gate": {
+        "total_test_lines": 112,
+        "high_confidence_matches": 0,
+        "ambiguous_requires_confirmation": 49,
+        "abstained_lines": 63,
+        "confirmation_rate_pct": 43.75
+      }
+    },
+    {
+      "iteration": 8,
+      "cohort_label": "N=20 (W01-W20)",
+      "writers": [
+        "W01", "W02", "W03", "W04", "W05", "W06", "W07", "W08", "W09", "W10",
+        "W11", "W12", "W13", "W14", "W15", "W16", "W17", "W18", "W19", "W20"
+      ],
+      "training_lines": 320,
+      "validation_lines": 80,
+      "test_lines": 160,
+      "epochs_run": 36,
+      "best_epoch": 31,
+      "best_val_loss": 5.8528,
+      "final_train_loss": 4.0754,
+      "generic_macro_cer": 0.9653,
+      "adapted_macro_cer": 0.6579,
+      "cer_relative_reduction_pct": 31.85,
+      "generic_macro_wer": 1.3539,
+      "adapted_macro_wer": 0.9030,
+      "wer_relative_reduction_pct": 33.31,
+      "per_writer_adapted_cer": {
+        "W01": 0.6765, "W02": 0.6898, "W03": 0.7032, "W04": 0.6672, "W05": 0.6180,
+        "W06": 0.7099, "W07": 0.6546, "W08": 0.6512, "W09": 0.6455, "W10": 0.6683,
+        "W11": 0.6531, "W12": 0.6930, "W13": 0.6824, "W14": 0.6369, "W15": 0.6050,
+        "W16": 0.7225, "W17": 0.6155, "W18": 0.6254, "W19": 0.6310, "W20": 0.6090
+      },
+      "safety_gate": {
+        "total_test_lines": 160,
+        "high_confidence_matches": 0,
+        "ambiguous_requires_confirmation": 103,
+        "abstained_lines": 57,
+        "confirmation_rate_pct": 64.38
+      }
+    },
+    {
+      "iteration": 9,
+      "cohort_label": "N=22 (W01-W22)",
+      "writers": [
+        "W01", "W02", "W03", "W04", "W05", "W06", "W07", "W08", "W09", "W10",
+        "W11", "W12", "W13", "W14", "W15", "W16", "W17", "W18", "W19", "W20",
+        "W21", "W22"
+      ],
+      "training_lines": 352,
+      "validation_lines": 88,
+      "test_lines": 176,
+      "epochs_run": 26,
+      "best_epoch": 21,
+      "best_val_loss": 5.9649,
+      "final_train_loss": 4.2895,
+      "generic_macro_cer": 0.9713,
+      "adapted_macro_cer": 0.6691,
+      "cer_relative_reduction_pct": 31.11,
+      "generic_macro_wer": 1.3572,
+      "adapted_macro_wer": 0.9150,
+      "wer_relative_reduction_pct": 32.58,
+      "per_writer_adapted_cer": {
+        "W01": 0.6882, "W02": 0.7283, "W03": 0.6721, "W04": 0.6562, "W05": 0.6956,
+        "W06": 0.6693, "W07": 0.6099, "W08": 0.6560, "W09": 0.6503, "W10": 0.6402,
+        "W11": 0.6874, "W12": 0.6642, "W13": 0.6691, "W14": 0.6779, "W15": 0.6930,
+        "W16": 0.7096, "W17": 0.6206, "W18": 0.6960, "W19": 0.6617, "W20": 0.6395,
+        "W21": 0.6535, "W22": 0.6826
+      },
+      "safety_gate": {
+        "total_test_lines": 176,
+        "high_confidence_matches": 0,
+        "ambiguous_requires_confirmation": 110,
+        "abstained_lines": 66,
+        "confirmation_rate_pct": 62.50
+      }
+    }
+  ]
+}
