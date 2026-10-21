@@ -1,9 +1,9 @@
 # Empirical Investigation into Writer-Adaptive Cursive Prescription Recognition: Capacity Ceilings, Cross-Attention Dynamics, and Clinical Safety Gating
 
-**Course**: B.E. Computer Science & Engineering (UCS503 Software Engineering Lab)  
-**Evaluator**: Mr. Sukhpal Singh (Research Scholar)  
-**Authoritative Protocol**: `Pharmacon_Writer_Calibration_Protocol.pdf`  
-**Date**: October 2026  
+**Course**: B.E. Computer Science & Engineering (UCS503 Software Engineering Lab)
+**Evaluator**: Mr. Sukhpal Singh (Research Scholar)
+**Authoritative Protocol**: `Pharmacon_Writer_Calibration_Protocol.pdf`
+**Date**: October 2026
 
 ---
 
@@ -66,10 +66,10 @@ MACRO         1.0264      0.8205      0.8150        1.4153      1.1317      1.10
 ```
 
 ### The Mechanism of the Illusion
-* **Levenshtein Distance Mathematics**:  
-  Consider target: `Tab Paracetamol 650 mg SOS after food; maximum 3 tablets/day.` (61 chars)  
-  Model output: `In the following month he was assigned to the unsuccessful military` (67 chars)  
-  Levenshtein Distance: $57 \rightarrow \text{CER} = 57 / 61 = \mathbf{0.9344}$.  
+* **Levenshtein Distance Mathematics**:
+  Consider target: `Tab Paracetamol 650 mg SOS after food; maximum 3 tablets/day.` (61 chars)
+  Model output: `In the following month he was assigned to the unsuccessful military` (67 chars)
+  Levenshtein Distance: $57 \rightarrow \text{CER} = 57 / 61 = \mathbf{0.9344}$.
   Even though **not a single character or token was correctly transcribed**, the metric reports a CER under 1.0 due to coincidental character overlaps (`'a'`, `'e'`, `'i'`, `'n'`).
 * **Semantic Grounding**: 0 out of 176 held-out test lines ($22 \times 8$) were correctly recognized. The frozen decoder acted as an insurmountable linguistic barrier.
 
@@ -146,13 +146,13 @@ When the newly trained Encoder-Decoder model was combined with the Formulary Tri
 ```
 
 ### The Mathematical Explanation of the Failure Mode
-* Look at **Line E07** of the training set:  
+* Look at **Line E07** of the training set:
   `Tab Amlodipine 5 mg, 1-0-0 every morning.`
-* Look at **Line E11** of the training set:  
+* Look at **Line E11** of the training set:
   `Inhaler Budesonide 200 mcg, 2 puffs BD; rinse after use.`
 
-**The Model Completely Overfit to Its Training Set Vocabulary.**  
-When trained on only 16 lines, cross-attention projection weights update exclusively on the tokens present in those 16 lines. When evaluated on held-out lines containing unseen medicines ($T01$–$T08$), the cross-attention layer emits near-zero logits for `Paracetamol` or `Quetiapine`, and enormous positive logits for `Amlodipine`. 
+**The Model Completely Overfit to Its Training Set Vocabulary.**
+When trained on only 16 lines, cross-attention projection weights update exclusively on the tokens present in those 16 lines. When evaluated on held-out lines containing unseen medicines ($T01$–$T08$), the cross-attention layer emits near-zero logits for `Paracetamol` or `Quetiapine`, and enormous positive logits for `Amlodipine`.
 
 Constrained beam search is therefore forced to select `Amlodipine` on every line because it is the only valid Trie path supported by the overfit cross-attention weights.
 
@@ -169,22 +169,22 @@ flowchart TD
     A["Doctor Handwritten Prescription Sheet"] --> B["SIFT Feature Homography Line Cropper"]
     B --> C["704 Standardized Line Crops (crops/Wxx/Txx.jpg)"]
     C --> D["Dual-Engine Transcription System"]
-    
+
     subgraph "AI Inference Engine"
         D --> E["TrOCR Visual Encoder + Decoder Cross-Attention LoRA"]
         E --> F["NLEM 2022 Formulary-Constrained Beam Search"]
     end
-    
+
     F --> G["Clinical Safety Gate & Abstention Engine"]
-    
+
     subgraph "Safety & Governance Layer"
         G -->|"Confidence >= 0.85 & Valid Entity"| H["High Confidence Match (Promoted)"]
         G -->|"Confidence < 0.85 or Lexical Mismatch"| I["SAFE ABSTENTION (Automated Dispense Locked)"]
     end
-    
+
     H --> J["Pharmacist Verification Web Interface (app.py)"]
     I --> J
-    
+
     subgraph "Clinical Data Store"
         J -->|"Pharmacist 1-Click Approval"| K["Atomic Inventory Decrement (SQLite)"]
         K --> L["Immutable Patient Chart Audit Timestamp"]

@@ -1,86 +1,46 @@
-# ===================================================================
-# Python Bytecode, Caches & Environments
-# ===================================================================
+# Python Bytecode & Environments
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.pytest_cache/
 .venv/
-venv/
-env/
-ENV/
-build/
-dist/
-*.egg-info/
-.eggs/
 
-# ===================================================================
-# IDEs & Editor Configurations
-# ===================================================================
-.commandcode/
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
+# Testing & Quality
+.pytest_cache/
+.coverage
 
-# ===================================================================
-# Jupyter & Colab Checkpoints
-# ===================================================================
-.ipynb_checkpoints/
-*/.ipynb_checkpoints/
-
-# ===================================================================
-# Machine Learning Weights & Large Model Checkpoints
-# ===================================================================
-adapters/
+# ML Weights & Local Database
 checkpoints/
-models/
 *.pt
-*.pth
-*.bin
-*.safetensors
-*.onnx
-
-# ===================================================================
-# Local Database Binaries (Auto-initialized by app.py)
-# ===================================================================
 *.db
-*.sqlite
 *.sqlite3
 
-# ===================================================================
-# Raw Image Dumps, Extracted Crops & Uploads (Prevents Repo Bloat)
-# ===================================================================
+# Project Image Data & Pipeline Outputs
 crops/
-test_crops/
-sheet_photos/
 dataset/
-data/uploads/
+uploads/
+anonymized_output/
+anonymized_outputs/
+redacted_outputs/
 *.zip
-*.tar.gz
-*.tar
-*.7z
 
-# ===================================================================
 # Logs & Temporary Files
-# ===================================================================
 *.log
 temp/
 tmp/
+*.tmp
+*.swp
+*~
 
-# ===================================================================
-# OS & System Artifacts
-# ===================================================================
+# OS & Editor
 .DS_Store
 Thumbs.db
-desktop.ini
+.vscode/
+.commandcode/
 
-# ===================================================================
-# Sensitive Credentials & Local Environment Files
-# ===================================================================
+# Local Environment
 .env
-*.token
-*.pem
-*.key
+
+# Personal Study Notes & Internal Docs (Local only)
+**/PHARMACON_CONCEPTUAL_MASTER_STUDY_GUIDE.md
+**/Pharmacon_Commitment_Pitch.pptx
+**/Pharmacon_Writer_Calibration_Protocol.pdf
+notes/
