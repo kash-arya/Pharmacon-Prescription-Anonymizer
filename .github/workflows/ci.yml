@@ -1,0 +1,43 @@
+name: Pharmacon CI & Verification Suite
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Unit & Integration Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install System Dependencies (Tesseract OCR & OpenCV)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr tesseract-ocr-eng libgl1-mesa-glx
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r prescription_anonymizer/requirements.txt
+          pip install httpx
+
+      - name: Run Test Suite
+        working-directory: prescription_anonymizer
+        run: |
+          python -m unittest discover -s tests -p "test_*.py"
+
+      - name: Run Comparative Benchmark Cohort
+        working-directory: prescription_anonymizer
+        run: |
+          python benchmarks/benchmark_comparative.py

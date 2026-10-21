@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  # Python Medical Prescription Anonymizer Microservice
+  anonymizer-service:
+    build: .
+    container_name: pharmacon-anonymizer
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./data/tessdata:/app/data/tessdata:ro
+
+  # Example Node.js Backend Service (Replace with teammate's app)
+  # backend-node:
+  #   build: ./backend
+  #   container_name: hospital-backend
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     - ANONYMIZER_SERVICE_URL=http://anonymizer-service:8000
+  #   depends_on:
+  #     - anonymizer-service

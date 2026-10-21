@@ -1,0 +1,96 @@
+[
+  {
+    "filename": "prescription_00006.png",
+    "filepath": "/home/a87k/Projects/SE_Lab_Project/prescription_anonymizer/data/raw_public_slips/prescription_00006.png",
+    "source": "huggingface:chinmays18/medical-prescription-dataset",
+    "url": "https://huggingface.co/datasets/chinmays18/medical-prescription-dataset/resolve/main/test/images/prescription_00006.png",
+    "type": "full_page_rx_slip"
+  },
+  {
+    "filename": "prescription_00025.png",
+    "filepath": "/home/a87k/Projects/SE_Lab_Project/prescription_anonymizer/data/raw_public_slips/prescription_00025.png",
+    "source": "huggingface:chinmays18/medical-prescription-dataset",
+    "url": "https://huggingface.co/datasets/chinmays18/medical-prescription-dataset/resolve/main/test/images/prescription_00025.png",
+    "type": "full_page_rx_slip"
+  },
+  {
+    "filename": "prescription_00027.png",
+    "filepath": "/home/a87k/Projects/SE_Lab_Project/prescription_anonymizer/data/raw_public_slips/prescription_00027.png",
+    "source": "huggingface:chinmays18/medical-prescription-dataset",
+    "url": "https://huggingface.co/datasets/chinmays18/medical-prescription-dataset/resolve/main/test/images/prescription_00027.png",
+    "type": "full_page_rx_slip"
+  },
+  {
+    "filename": "prescription_00030.png",
+    "filepath": "/home/a87k/Projects/SE_Lab_Project/prescription_anonymizer/data/raw_public_slips/prescription_00030.png",
+    "source": "huggingface:chinmays18/medical-prescription-dataset",
+    "url": "https://huggingface.co/datasets/chinmays18/medical-prescription-dataset/resolve/main/test/images/prescription_00030.png",
+    "type": "full_page_rx_slip"
+  },
+  {
+    "filename": "prescription_00032.png",
+    "filepath": "/home/a87k/Projects/SE_Lab_Project/prescription_anonymizer/data/raw_public_slips/prescription_00032.png",
+    "source": "huggingface:chinmays18/medical-prescription-dataset",
+    "url": "https://huggingface.co/datasets/chinmays18/medical-prescription-dataset/resolve/main/test/images/prescription_00032.png",
+    "type": "full_page_rx_slip"
+  },
+  {
+    "filename": "prescription_00044.png",
+    "filepath": "/home/a87k/Projects/SE_Lab_Project/prescription_anonymizer/data/raw_public_slips/prescription_00044.png",
+    "source": "huggingface:chinmays18/medical-prescription-dataset",
+    "url": "https://huggingface.co/datasets/chinmays18/medical-prescription-dataset/resolve/main/test/images/prescription_00044.png",
+    "type": "full_page_rx_slip"
+  },
+  {
+    "filename": "prescription_00046.png",
+    "filepath": "/home/a87k/Projects/SE_Lab_Project/prescription_anonymizer/data/raw_public_slips/prescription_00046.png",
+    "source": "huggingface:chinmays18/medical-prescription-dataset",
+    "url": "https://huggingface.co/datasets/chinmays18/medical-prescription-dataset/resolve/main/test/images/prescription_00046.png",
+    "type": "full_page_rx_slip"
+  },
+  {
+    "filename": "prescription_00071.png",
+    "filepath": "/home/a87k/Projects/SE_Lab_Project/prescription_anonymizer/data/raw_public_slips/prescription_00071.png",
+    "source": "huggingface:chinmays18/medical-prescription-dataset",
+    "url": "https://huggingface.co/datasets/chinmays18/medical-prescription-dataset/resolve/main/test/images/prescription_00071.png",
+    "type": "full_page_rx_slip"
+  },
+  {
+    "filename": "prescription_00080.png",
+    "filepath": "/home/a87k/Projects/SE_Lab_Project/prescription_anonymizer/data/raw_public_slips/prescription_00080.png",
+    "source": "huggingface:chinmays18/medical-prescription-dataset",
+    "url": "https://huggingface.co/datasets/chinmays18/medical-prescription-dataset/resolve/main/test/images/prescription_00080.png",
+    "type": "full_page_rx_slip"
+  },
+  {
+    "filename": "prescription_00081.png",
+    "filepath": "/home/a87k/Projects/SE_Lab_Project/prescription_anonymizer/data/raw_public_slips/prescription_00081.png",
+    "source": "huggingface:chinmays18/medical-prescription-dataset",
+    "url": "https://huggingface.co/datasets/chinmays18/medical-prescription-dataset/resolve/main/test/images/prescription_00081.png",
+    "type": "full_page_rx_slip"
+  },
+  {
+    "filename": "sample_digital_vector_prescription.pdf",
+    "filepath": "/home/a87k/Projects/SE_Lab_Project/prescription_anonymizer/data/samples/sample_digital_vector_prescription.pdf",
+    "source": "local_samples",
+    "type": "authentic_base_slip"
+  },
+  {
+    "filename": "sample_patient_details_1.pdf",
+    "filepath": "/home/a87k/Projects/SE_Lab_Project/prescription_anonymizer/data/samples/sample_patient_details_1.pdf",
+    "source": "local_samples",
+    "type": "authentic_base_slip"
+  },
+  {
+    "filename": "sample_prescription_1.pdf",
+    "filepath": "/home/a87k/Projects/SE_Lab_Project/prescription_anonymizer/data/samples/sample_prescription_1.pdf",
+    "source": "local_samples",
+    "type": "authentic_base_slip"
+  },
+  {
+    "filename": "sample_prescription_2.pdf",
+    "filepath": "/home/a87k/Projects/SE_Lab_Project/prescription_anonymizer/data/samples/sample_prescription_2.pdf",
+    "source": "local_samples",
+    "type": "authentic_base_slip"
+  }
+]
