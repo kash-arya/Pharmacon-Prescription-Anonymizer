@@ -79,6 +79,17 @@ def resolve_tessdata_path(custom_dir: Optional[str] = None) -> str:
     return candidates[0] if candidates else "/usr/share/tessdata"
 
 
+def get_ocr_languages(tessdata_dir: Optional[str]) -> str:
+    """Returns available OCR languages (eng+deu+fra+spa or available subset)."""
+    if not tessdata_dir or not os.path.isdir(tessdata_dir):
+        return "eng"
+    langs = ["eng"]
+    for lang in ["deu", "fra", "spa"]:
+        if os.path.exists(os.path.join(tessdata_dir, f"{lang}.traineddata")):
+            langs.append(lang)
+    return "+".join(langs)
+
+
 class LocalImageRedactor:
     """
     Resolution-invariant OCR & visual redaction engine for scanned raster PDFs
@@ -227,9 +238,8 @@ class LocalImageRedactor:
 
         return boxes
 
-    def _get_enhanced_header_ocr(self, page: pymupdf.Page) -> Tuple[List[Any], pymupdf.Page, pymupdf.TextPage, pymupdf.Document]:
-        """Performs CLAHE adaptive contrast preprocessing on upper region of page (45%) to uncover faint/glare headers."""
-        h_ratio = 0.45
+    def _get_enhanced_fullpage_ocr(self, page: pymupdf.Page, h_ratio: float = 0.45) -> Tuple[List[Any], pymupdf.Page, pymupdf.TextPage, pymupdf.Document]:
+        """Performs CLAHE adaptive contrast preprocessing, denoising, and unsharp masking."""
         max_pt = max(page.rect.width, page.rect.height)
         effective_dpi = 72 if max_pt > 2000 else self.dpi
         pix = page.get_pixmap(dpi=effective_dpi, clip=pymupdf.Rect(0, 0, page.rect.width, page.rect.height * h_ratio))
@@ -241,32 +251,139 @@ class LocalImageRedactor:
         else:
             gray = arr
 
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        # 1. Denoising + CLAHE
+        clahe = cv2.createCLAHE(clipLimit=2.2, tileGridSize=(8, 8))
         cl_img = clahe.apply(gray)
 
-        is_success, buf = cv2.imencode('.png', cl_img)
+        # 2. Unsharp masking to sharpen blurry camera text
+        blurred = cv2.GaussianBlur(cl_img, (0, 0), 3)
+        sharpened = cv2.addWeighted(cl_img, 1.5, blurred, -0.5, 0)
+
+        is_success, buf = cv2.imencode('.png', sharpened)
         tmp_doc = pymupdf.open()
-        KEY_VALUE_ANCHORS,
-        CLINICAL_WHITELIST_PATTERNS,
-        KEY_VALUE_ANCHORS,
-        CLINICAL_WHITELIST_PATTERNS,
-        STATUTORY_ID_PATTERNS,
-        is_whitelisted,
-        _COMPILED_WHITELIST,
-        STATUTORY_ID_PATTERNS,
-        is_whitelisted,
-        _COMPILED_WHITELIST,
         p_enh = tmp_doc.new_page(width=page.rect.width, height=page.rect.height * h_ratio)
         p_enh.insert_image(pymupdf.Rect(0, 0, page.rect.width, page.rect.height * h_ratio), stream=buf.tobytes())
-        tp_enh = p_enh.get_textpage_ocr(language="eng", dpi=effective_dpi, tessdata=self.tessdata_dir)
+        ocr_lang = get_ocr_languages(self.tessdata_dir)
+        tp_enh = p_enh.get_textpage_ocr(language=ocr_lang, dpi=effective_dpi, tessdata=self.tessdata_dir)
         words_enh = p_enh.get_text("words", textpage=tp_enh)
 
-        KEY_VALUE_ANCHORS,
-        CLINICAL_WHITELIST_PATTERNS,
-        STATUTORY_ID_PATTERNS,
-        is_whitelisted,
-        _COMPILED_WHITELIST,
         return words_enh, p_enh, tp_enh, tmp_doc
+
+    _get_enhanced_header_ocr = _get_enhanced_fullpage_ocr
+
+    def _expand_person_span_on_line(self, rect: pymupdf.Rect, line_objects: List[Dict[str, Any]]) -> pymupdf.Rect:
+        """
+        Expands a person bounding box horizontally to adjacent name tokens, honorifics,
+        and initials on the same visual line within 35 pt gap, excluding form labels,
+        stopwords, and clinical whitelist terms.
+        """
+        if not line_objects:
+            return rect
+
+        rect_mid_y = (rect.y0 + rect.y1) / 2.0
+        best_line = None
+        min_v_dist = float("inf")
+        for line in line_objects:
+            l_rect = line["rect"]
+            l_mid_y = (l_rect.y0 + l_rect.y1) / 2.0
+            v_dist = abs(rect_mid_y - l_mid_y)
+            if v_dist < max(18.0, l_rect.height * 0.6) and v_dist < min_v_dist:
+                min_v_dist = v_dist
+                best_line = line
+
+        if best_line is None:
+            return rect
+
+        words = best_line["words"]
+        if not words:
+            return rect
+
+        intersecting_indices = []
+        for i, (w_rect, w_txt) in enumerate(words):
+            inter = rect & w_rect
+            if not inter.is_empty and inter.get_area() > 0.15 * min(rect.get_area(), w_rect.get_area()):
+                intersecting_indices.append(i)
+            elif abs((w_rect.y0 + w_rect.y1)/2.0 - rect_mid_y) < max(12.0, w_rect.height * 0.5):
+                if not (w_rect.x1 < rect.x0 - 5 or w_rect.x0 > rect.x1 + 5):
+                    intersecting_indices.append(i)
+
+        if not intersecting_indices:
+            closest_idx = None
+            closest_dist = float("inf")
+            for i, (w_rect, w_txt) in enumerate(words):
+                dist = abs((w_rect.x0 + w_rect.x1)/2.0 - (rect.x0 + rect.x1)/2.0)
+                if dist < closest_dist and dist < 40.0:
+                    closest_dist = dist
+                    closest_idx = i
+            if closest_idx is not None:
+                intersecting_indices = [closest_idx]
+            else:
+                return rect
+
+        min_idx = min(intersecting_indices)
+        max_idx = max(intersecting_indices)
+
+        honorific_re = re.compile(
+            r"^(?:Mr|Mrs|Ms|Miss|Master|Baby|Shri|Smt|Herr|Frau|Fr\.|M\.|Mme|Mlle|Monsieur|Madame|Mademoiselle|Sr\.|Sra\.|Srta\.|Señor|Señora|Señorita|Sig\.|Sig\.ra|Signor|Signora|Dott\.|Dott\.ssa|Dr|Prof)\.?$",
+            re.IGNORECASE
+        )
+        initial_re = re.compile(r"^[A-ZÄÖÜÁÉÍÓÚÑ]\.?$")
+        name_token_re = re.compile(r"^[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ\-'.]*$")
+        stopwords = {
+            "AGE", "SEX", "MALE", "FEMALE", "DATE", "ADDRESS", "PHONE", "HOSPITAL", "CLINIC",
+            "RX", "RP", "TAB", "TABS", "TABLET", "TABLETS", "REFILL", "SIG", "DOSE", "DAILY",
+            "DIRECTIONS", "PATIENT", "NAME", "PT", "MRN", "UHID", "OPD", "IPD", "YEARS", "YRS",
+            "Y", "M", "F", "NORMAL", "DIAGNOSIS", "DEPARTMENT", "SURGERY", "MEDICINE", "REF", "BY"
+        }
+
+        def is_valid_name_token(token_str: str) -> bool:
+            clean = token_str.strip()
+            clean_alnum = re.sub(r"^[^\w]+|[^\w]+$", "", clean)
+            if not clean_alnum:
+                return False
+            upper = clean_alnum.upper()
+            if upper in stopwords:
+                return False
+            if self.is_whitelisted(clean):
+                return False
+            for patterns in KEY_VALUE_ANCHORS.values():
+                for pat in patterns:
+                    if re.search(pat, clean, re.IGNORECASE):
+                        if not honorific_re.match(clean):
+                            return False
+            if honorific_re.match(clean) or initial_re.match(clean) or name_token_re.match(clean):
+                return True
+            return False
+
+        curr_min = min_idx
+        for idx in range(min_idx - 1, -1, -1):
+            w_rect, w_txt = words[idx]
+            next_rect, _ = words[idx + 1]
+            gap = next_rect.x0 - w_rect.x1
+            if gap > 35:
+                break
+            if is_valid_name_token(w_txt):
+                curr_min = idx
+            else:
+                break
+
+        curr_max = max_idx
+        for idx in range(max_idx + 1, len(words)):
+            w_rect, w_txt = words[idx]
+            prev_rect, _ = words[idx - 1]
+            gap = w_rect.x0 - prev_rect.x1
+            if gap > 35:
+                break
+            if is_valid_name_token(w_txt):
+                curr_max = idx
+            else:
+                break
+
+        expanded_rect = pymupdf.Rect(rect)
+        for idx in range(curr_min, curr_max + 1):
+            expanded_rect = expanded_rect | words[idx][0]
+
+        return expanded_rect
 
     def _reconstruct_visual_lines(self, words: List[Tuple]) -> List[Dict[str, Any]]:
         """
@@ -316,7 +433,8 @@ class LocalImageRedactor:
         """
         max_pt = max(page.rect.width, page.rect.height)
         effective_dpi = 72 if max_pt > 2000 else self.dpi
-        tp = page.get_textpage_ocr(language="eng", dpi=effective_dpi, tessdata=self.tessdata_dir)
+        ocr_lang = get_ocr_languages(self.tessdata_dir)
+        tp = page.get_textpage_ocr(language=ocr_lang, dpi=effective_dpi, tessdata=self.tessdata_dir)
         words = page.get_text("words", textpage=tp)
         full_text = page.get_text(textpage=tp)
         self._last_extracted_text = full_text
@@ -338,6 +456,7 @@ class LocalImageRedactor:
 
         targets: List[RedactionTarget] = []
         recorded_rects: List[pymupdf.Rect] = []
+        active_lines: List[Dict[str, Any]] = []
 
         def can_redact(rect: pymupdf.Rect, raw_text: str) -> bool:
             if raw_text == "BARCODE_OR_QR" or raw_text.startswith("http") or raw_text in ("QR_CODE", "BARCODE"):
@@ -364,6 +483,12 @@ class LocalImageRedactor:
             return True
 
         def add_target(rect: pymupdf.Rect, category: str, text: str, engine: str = "ocr_dynamic"):
+            if category in ("PATIENT_NAME", "PATIENT_NAME_VALUE", "PATIENT_NAME_VALUE_CLAHE",
+                            "PATIENT_NAME_VALUE_2D", "PATIENT_HONORIFIC", "PATIENT_HONORIFIC_ENHANCED",
+                            "DOCTOR_NAME", "DOCTOR_NAME_ENHANCED") or \
+               category.startswith("PATIENT_NAME") or category.startswith("DOCTOR_NAME"):
+                rect = self._expand_person_span_on_line(rect, active_lines)
+
             if not can_redact(rect, text):
                 return
             if rect.get_area() <= 0:
@@ -410,6 +535,7 @@ class LocalImageRedactor:
 
         # Reconstruct logical visual lines
         line_objects = self._reconstruct_visual_lines(words)
+        active_lines = line_objects
 
         # -------------------------------------------------------------------
         # 1. Dynamic 2D Multi-Column Key-Value Form Field Parser
@@ -595,20 +721,20 @@ class LocalImageRedactor:
         # 2. Universal Standalone Regex Entity Scanners
         # -------------------------------------------------------------------
         standalone_regexes = [
-            ("PHONE", r"\b(?:\+?91[\-\s]?)?[6-9]\d{9}\b|\b0\d{2,4}[\-\s]?\d{6,8}\b|\b\(\d{3}\)[\s\-]?[0-9O]{3}[\-\s]?\d{4}\b|\b\d{3}\)[\s\-]?[0-9O]{3}[\-\s]?\d{4}\b"),
-            ("DATE", r"\b\d{1,2}[/\-.][0-9]{1,2}[/\-.][0-9]{2,4}\b|\b\d{1,2}[\s\-_](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\s\-_]\d{2,4}\b|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4}\b"),
-            ("EMAIL", r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
-            ("URL", r"\bhttps?://[^\s/$.?#].[^\s]*\b"),
-            ("PATIENT_HONORIFIC", r"\b(?:Mr|Mrs|Ms|Miss|Master|Baby|Shri|Smt)\.?[^\S\r\n]*[A-Z][a-zA-Z]+(?:[^\S\r\n]+[A-Z][a-zA-Z]+)*\b"),
-            ("DOCTOR_NAME", r"\b(?:Dr\.|Dr|Prof\.|Prof|Or\.)[^\S\r\n]*[A-Z][a-zA-Z]+(?:[^\S\r\n]+[A-Z]\.?)?(?:[^\S\r\n]+[A-Z][a-zA-Z]+)*(?:\s*\([A-Za-z\s,.]+\))?\b|\b(?:Dr|Prof)[A-Z][a-zA-Z]+\b|\b[A-Z][a-zA-Z]+(?:[^\S\r\n]+[A-Z]\.?)?(?:[^\S\r\n]+[A-Z][a-zA-Z]+)*[,\s]+(?:M\.?B\.?B\.?S|M\.?D|M\.?S|D\.?M\.?R\.?D|D\.?N\.?B|F\.?R\.?C\.?R|F\.?R\.?C\.?S)\b"),
-            ("DOCTOR_CREDENTIALS", r"\b(?:MBBS|M\.B\.B\.S|MD|M\.D|MS|M\.S|DMRD|D\.M\.R\.D|DNB|D\.N\.B|FRCR|FRCS)\b"),
-            ("ID_TOKEN", r"\b[A-Z]{2,4}[-/]\d{4,12}(?:[-/]\d+)?\b|\b\d{8,12}\b"),
-            ("ADDRESS_STREET", r"\b\d+\s+[A-Za-z0-9\-]+(?:\s+[A-Za-z0-9\-]+)*\s+(?:Street|St|Avenue|Ave|Drive|Dr|Road|Rd|Boulevard|Blvd|Court|Ct|Lane|Ln|Terrace|Colony|Market|Chowk|Way|Square|Sq|Place|Pl)\b|\bSEC(?:TOR)?\s*\d+[\s,]+[A-Za-z]+\b"),
-            ("CITY_STATE", r"\b(?:City|State|Country|District|Town|Location)\s*[:\-=~+]?\s*[A-Za-z\s]+\b"),
+            ("PHONE", re.compile(r"\b(?:\+?91[\-\s]?)?[6-9]\d{9}\b|\b0\d{2,4}[\-\s]?\d{6,8}\b|\b\(\d{3}\)[\s\-]?[0-9O]{3}[\-\s]?\d{4}\b|\b\d{3}\)[\s\-]?[0-9O]{3}[\-\s]?\d{4}\b", re.IGNORECASE)),
+            ("DATE", re.compile(r"\b\d{1,2}[/\-.][0-9]{1,2}[/\-.][0-9]{2,4}\b|\b\d{1,2}[\s\-_](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|Januar|Februar|März|Mai|Juni|Juli|Oktober|Dezember|Enero|Febrero|Marzo|Abril|Mayo|Junio|Julio|Agosto|Septiembre|Octubre|Noviembre|Diciembre|Janvier|Février|Mars|Avril|Mai|Juin|Juillet|Août|Septembre|Octobre|Novembre|Décembre)[a-z]*[\s\-_]\d{2,4}\b|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|Januar|Februar|März|Mai|Juni|Juli|Oktober|Dezember|Enero|Febrero|Marzo|Abril|Mayo|Junio|Julio|Agosto|Septiembre|Octubre|Noviembre|Diciembre|Janvier|Février|Mars|Avril|Mai|Juin|Juillet|Août|Septembre|Octobre|Novembre|Décembre)[a-z]*\s+\d{1,2},?\s+\d{4}\b", re.IGNORECASE)),
+            ("EMAIL", re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", re.IGNORECASE)),
+            ("URL", re.compile(r"\bhttps?://[^\s/$.?#].[^\s]*\b", re.IGNORECASE)),
+            ("PATIENT_HONORIFIC", re.compile(r"(?i:\b(?:Mr|Mrs|Ms|Miss|Master|Baby|Shri|Smt|Herr|Frau|Fr\.|M\.|Mme|Mlle|Monsieur|Madame|Mademoiselle|Sr\.|Sra\.|Srta\.|Señor|Señora|Señorita|Sig\.|Sig\.ra|Signor|Signora|Dott\.|Dott\.ssa)\.?)[^\S\r\n]+[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ\-'.]+(?:[^\S\r\n]+(?:[A-ZÄÖÜÁÉÍÓÚÑ]\.?|[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ\-'.]+))*")),
+            ("DOCTOR_NAME", re.compile(r"(?i:\b(?:Dr\.|Dr|Prof\.|Prof|Herr\s+Dr\.|Frau\s+Dr\.|Prof\.\s*Dr\.|Dr\.\s*med\.|Dott\.|Dott\.ssa|Or\.))[^\S\r\n]+(?:[A-ZÄÖÜÁÉÍÓÚÑ]\.?[^\S\r\n]+)?[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ\-'.]+(?:[^\S\r\n]+(?:[A-ZÄÖÜÁÉÍÓÚÑ]\.?|[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ\-'.]+))*(?:\s*\([A-Za-z\s,.]+\))?|\b(?:Dr|Prof)[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ]+\b|\b[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ\-'.]+(?:[^\S\r\n]+(?:[A-ZÄÖÜÁÉÍÓÚÑ]\.?|[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ\-'.]+))*[,\s]+(?:M\.?B\.?B\.?S|M\.?D|M\.?S|D\.?M\.?R\.?D|D\.?N\.?B|F\.?R\.?C\.?R|F\.?R\.?C\.?S)\b")),
+            ("DOCTOR_CREDENTIALS", re.compile(r"\b(?:MBBS|M\.B\.B\.S|MD|M\.D|MS|M\.S|DMRD|D\.M\.R\.D|DNB|D\.N\.B|FRCR|FRCS)\b")),
+            ("ID_TOKEN", re.compile(r"\b[A-Z]{2,4}[-/]\d{4,12}(?:[-/]\d+)?\b|\b\d{8,12}\b")),
+            ("ADDRESS_STREET", re.compile(r"\b\d+\s+[A-Za-z0-9\-]+(?:\s+[A-Za-z0-9\-]+)*\s+(?:Street|St|Avenue|Ave|Drive|Dr|Road|Rd|Boulevard|Blvd|Court|Ct|Lane|Ln|Terrace|Colony|Market|Chowk|Way|Square|Sq|Place|Pl|Straße|Str|Weg|Platz|Allee|Gasse|Rue|Bd|Calle|Paseo|Via|Piazza)\b|\b[A-ZÄÖÜÁÉÍÓÚÑ][a-zäöüßáéíóúñ]+(?:straße|str\.|strasse|weg|platz|allee|gasse)\s+\d+[a-zA-Z]?\b|\b(?:Rue|Boulevard|Bd|Calle|Paseo|Via|Piazza)\s+(?:de\s+|del\s+|della\s+|di\s+)?[A-ZÄÖÜÁÉÍÓÚÑ][a-zäöüßáéíóúñ]+(?:[ \t]+[A-ZÄÖÜÁÉÍÓÚÑ][a-zäöüßáéíóúñ]+){0,3}(?:\s+\d+[a-zA-Z]?)?\b|\bSEC(?:TOR)?\s*\d+[\s,]+[A-Za-z]+\b", re.IGNORECASE)),
+            ("CITY_STATE", re.compile(r"\b(?:City|State|Country|District|Town|Location)\s*[:\-=~+]?\s*[A-Za-z\s]+\b", re.IGNORECASE)),
         ]
 
         for cat, reg in standalone_regexes:
-            for match in re.finditer(reg, full_text, re.IGNORECASE):
+            for match in reg.finditer(full_text):
                 match_str = match.group(0).strip()
                 if not self.is_whitelisted(match_str) and len(match_str) > 2:
                     rects = page.search_for(match_str, textpage=tp)
@@ -687,15 +813,17 @@ class LocalImageRedactor:
                                 add_target(pr, cand["category"], part, engine="spacy_ner")
 
         # -------------------------------------------------------------------
-        # 3. CLAHE Contrast-Enhanced Header Pass (Faint Top Headers & Glare)
+        # 3. CLAHE Contrast-Enhanced Pass (Faint Headers, Glare & Blurry Text)
         # -------------------------------------------------------------------
         tmp_doc_enh = None
         try:
-            words_enh, p_enh, tp_enh, tmp_doc_enh = self._get_enhanced_header_ocr(page)
+            h_ratio = 1.0 if len(words) < 25 else 0.45
+            words_enh, p_enh, tp_enh, tmp_doc_enh = self._get_enhanced_fullpage_ocr(page, h_ratio=h_ratio)
             full_enh = p_enh.get_text(textpage=tp_enh)
 
-            # 3a. Reconstruct visual lines and run form anchor parsing on CLAHE header
+            # 3a. Reconstruct visual lines and run form anchor parsing on CLAHE pass
             line_objects_enh = self._reconstruct_visual_lines(words_enh)
+            active_lines = line_objects_enh
             for l_idx_e, l_obj_e in enumerate(line_objects_enh):
                 l_text_e = l_obj_e["text"]
                 l_words_e = l_obj_e["words"]
@@ -739,7 +867,7 @@ class LocalImageRedactor:
                                 break
                     if not is_sub:
                         dedup_anchors_e.append(a)
-                detected_anchors_e = dedup_anchors_e
+                    detected_anchors_e = dedup_anchors_e
                 detected_anchors_e.sort(key=lambda a: a["rect"].x0)
 
                 for a_idx, anchor in enumerate(detected_anchors_e):
@@ -772,16 +900,16 @@ class LocalImageRedactor:
                             val_rect = val_rect | sw[0]
                         add_target(val_rect, f"{a_cat}_VALUE_CLAHE", same_line_text, engine="form_field_expansion_clahe")
 
-            # 3b. Standalone regexes on CLAHE header
+            # 3b. Standalone regexes on CLAHE pass
             for cat, reg in standalone_regexes:
-                for match in re.finditer(reg, full_enh, re.IGNORECASE):
+                for match in reg.finditer(full_enh):
                     match_str = match.group(0).strip()
                     if not self.is_whitelisted(match_str) and len(match_str) > 2:
                         rects = p_enh.search_for(match_str, textpage=tp_enh)
                         for r in rects:
                             add_target(r, f"{cat}_ENHANCED", match_str, engine="ocr_contrast_enhanced")
 
-            # 3c. Generic Healthcare Facility & Provider Rule on CLAHE header
+            # 3c. Generic Healthcare Facility & Provider Rule on CLAHE pass
             for line in line_objects_enh:
                 if line["rect"].y1 <= header_zone_y:
                     line_str = line["text"].strip()
@@ -791,9 +919,25 @@ class LocalImageRedactor:
                         add_target(line["rect"], "CLINIC_FACILITY", line_str, engine="header_facility_rule_clahe")
                     elif re.search(r"\b(?:M\.?B\.?B\.?S|M\.?D|M\.?S|D\.?M\.?R\.?D|D\.?N\.?B|F\.?R\.?C\.?R|Regn?\.?|MCI|NMC)\b", line_str, re.IGNORECASE):
                         add_target(line["rect"], "HEADER_PROVIDER", line_str, engine="header_provider_rule_clahe")
+
+            # 3d. spaCy NER on enhanced OCR text
+            ner_candidates_enh = self.ner_engine.find_entities(full_enh)
+            for cand in ner_candidates_enh:
+                matched_str = cand["text"]
+                if not self.is_whitelisted(matched_str) and len(matched_str) >= 3:
+                    rects = p_enh.search_for(matched_str, textpage=tp_enh)
+                    for r in rects:
+                        add_target(r, f"{cand['category']}_ENHANCED", matched_str, engine="spacy_ner_clahe")
+                    if not rects and len(matched_str.split()) > 1:
+                        for part in matched_str.split():
+                            if len(part) >= 4 and not self.is_whitelisted(part):
+                                p_rects = p_enh.search_for(part, textpage=tp_enh)
+                                for pr in p_rects:
+                                    add_target(pr, f"{cand['category']}_ENHANCED", part, engine="spacy_ner_clahe")
         except Exception:
             pass
         finally:
+            active_lines = line_objects
             if tmp_doc_enh is not None:
                 tmp_doc_enh.close()
 

@@ -34,7 +34,9 @@ tmp/
 .DS_Store
 Thumbs.db
 .vscode/
-.commandcode/
+
+# Temporary Audit Exports
+WORKSPACE_REMAINING_FILES.md
 
 # Local Environment
 .env

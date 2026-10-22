@@ -98,7 +98,7 @@ class ForensicAuditor:
         for key, val in meta.items():
             if val and key.lower() not in {"producer", "creator", "format"}:
                 # If author, title, creationDate contain sensitive info
-                if any(w in str(val).lower() for w in ["dr", "patient", "hospital", "clinic", "apollo", "smith"]):
+                if any(w in str(val).lower() for w in ["dr", "patient", "hospital", "clinic", "mr", "mrs", "ms", "uhid", "mrn"]):
                     suspicious_fields[key] = val
 
         passed = len(suspicious_fields) == 0
@@ -189,13 +189,24 @@ class ForensicAuditor:
         Generates an auditable cryptographic sanitization certificate
         demonstrating compliance with HIPAA Safe Harbor and India DPDP 2023.
         """
+        ext = os.path.splitext(document_path)[1].lower()
+        is_pdf = ext == ".pdf"
+        is_image = ext in {".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".webp"}
+
         sha256_hash = self.compute_sha256(document_path)
-        byte_audit = self.audit_pdf_byte_streams(document_path, known_pii_strings) if document_path.lower().endswith(".pdf") else {"byte_audit_passed": True}
-        meta_audit = self.audit_metadata_sanitization(document_path) if document_path.lower().endswith(".pdf") else {"metadata_sanitized": True}
+        byte_audit = self.audit_pdf_byte_streams(document_path, known_pii_strings) if is_pdf else {"byte_audit_passed": True}
+        meta_audit = self.audit_metadata_sanitization(document_path) if is_pdf else {"metadata_sanitized": True}
 
-        is_compliant = byte_audit.get("byte_audit_passed", True) and meta_audit.get("metadata_sanitized", True)
+        optical_passed = True
+        optical_run = False
+        if masked_bboxes and is_image:
+            attack_res = self.simulate_optical_reconstruction_attack(document_path, masked_bboxes)
+            optical_passed = attack_res.get("adversarial_defense_passed", False)
+            optical_run = True
 
-        return {
+        is_compliant = byte_audit.get("byte_audit_passed", True) and meta_audit.get("metadata_sanitized", True) and optical_passed
+
+        cert = {
             "certificate_version": "Pharmacon-Audit-v1.0",
             "document_sha256": sha256_hash,
             "compliance_standard": "HIPAA 45 CFR § 164.514(b) (Safe Harbor) & DPDP Act 2023",
@@ -204,3 +215,7 @@ class ForensicAuditor:
             "metadata_sanitized": meta_audit.get("metadata_sanitized", True),
             "audit_timestamp": pymupdf.get_pdf_now(),
         }
+        if optical_run:
+            cert["optical_attack_passed"] = optical_passed
+
+        return cert

@@ -1,0 +1,48 @@
+# Python Bytecode & Environments
+__pycache__/
+*.py[cod]
+.venv/
+
+# Testing & Quality
+.pytest_cache/
+.coverage
+
+# ML Weights & Local Database
+checkpoints/
+*.pt
+*.db
+*.sqlite3
+
+# Project Image Data & Pipeline Outputs
+crops/
+dataset/
+uploads/
+anonymized_output/
+anonymized_outputs/
+redacted_outputs/
+*.zip
+
+# Logs & Temporary Files
+*.log
+temp/
+tmp/
+*.tmp
+*.swp
+*~
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Temporary Audit Exports
+WORKSPACE_REMAINING_FILES.md
+
+# Local Environment
+.env
+
+# Personal Study Notes & Internal Docs (Local only)
+**/PHARMACON_CONCEPTUAL_MASTER_STUDY_GUIDE.md
+**/Pharmacon_Commitment_Pitch.pptx
+**/Pharmacon_Writer_Calibration_Protocol.pdf
+notes/

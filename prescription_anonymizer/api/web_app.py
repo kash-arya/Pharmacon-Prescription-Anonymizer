@@ -18,7 +18,7 @@ def get_web_app_html() -> str:
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Pharmacon - Medical Prescription De-Identifier</title>
-  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
   <style>
     .split-container {
       position: relative;
@@ -292,6 +292,16 @@ def get_web_app_html() -> str:
     }
 
     // Single Document State
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
     const dropzone = document.getElementById('dropzone');
     const fileInput = document.getElementById('file-input');
     const resultSection = document.getElementById('result-section');
@@ -379,11 +389,14 @@ def get_web_app_html() -> str:
         const row = document.createElement('tr');
         const b = t.bbox || {};
         const coords = `[${Math.round(b.x0 || 0)}, ${Math.round(b.y0 || 0)}, ${Math.round(b.x1 || 0)}, ${Math.round(b.y1 || 0)}]`;
+        const cat = escapeHtml(t.category);
+        const raw = escapeHtml(t.raw_text || '-');
+        const eng = escapeHtml(t.engine);
         row.innerHTML = `
           <td class="py-2 px-4 text-slate-500">${i + 1}</td>
-          <td class="py-2 px-4 font-semibold text-sky-400">${t.category}</td>
-          <td class="py-2 px-4 text-slate-300 truncate max-w-xs font-sans">${t.raw_text || '-'}</td>
-          <td class="py-2 px-4 text-purple-400">${t.engine}</td>
+          <td class="py-2 px-4 font-semibold text-sky-400">${cat}</td>
+          <td class="py-2 px-4 text-slate-300 truncate max-w-xs font-sans">${raw}</td>
+          <td class="py-2 px-4 text-purple-400">${eng}</td>
           <td class="py-2 px-4 text-slate-400 font-mono text-[10px]">${coords}</td>
         `;
         tbody.appendChild(row);

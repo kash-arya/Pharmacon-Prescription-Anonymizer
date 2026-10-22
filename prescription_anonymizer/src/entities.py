@@ -162,9 +162,9 @@ PATIENT_NAME_ANCHORS = [
     r"\bPt(?:\s+Name)?\s*[:\-=~+]",
     r"\b‘?Name\s*[:\-=~+]",
     r"\bPatient\s*[:\-=~+]",
-    r"\bPatient\s+Surname\s*[:\-=~+]?\s*[A-Za-z\-]+",
-    r"\bForename(?:\(s\))?\s*[:\-=~+]?\s*[A-Za-z\-]+",
-    r"\b(?:Mr|Mrs|Ms|Miss|Master|Baby|Shri|Smt)\.?\s*[A-Za-z]+(?:\s+[A-Za-z]+)*",
+    r"\bPatient\s+Surname\s*[:\-=~+]?\s*[A-Za-zÄÖÜäöüßÁÉÍÓÚÑáéíóúñ\-]+",
+    r"\bForename(?:\(s\))?\s*[:\-=~+]?\s*[A-Za-zÄÖÜäöüßÁÉÍÓÚÑáéíóúñ\-]+",
+    r"\b(?:Mr|Mrs|Ms|Miss|Master|Baby|Shri|Smt|Herr|Frau|Fr\.|M\.|Mme|Mlle|Monsieur|Madame|Mademoiselle|Sr\.|Sra\.|Srta\.|Señor|Señora|Señorita|Sig\.|Sig\.ra|Signor|Signora|Dott\.|Dott\.ssa)\s+[A-Za-zÄÖÜäöüßÁÉÍÓÚÑáéíóúñ]+(?:\s+[A-Za-zÄÖÜäöüßÁÉÍÓÚÑáéíóúñ]+)*",
 ]
 
 DEMOGRAPHIC_ANCHORS = [
@@ -198,8 +198,8 @@ CONTACT_ANCHORS = [
 ]
 
 DOCTOR_ANCHORS = [
-    r"\b(?:Dr\.|Dr|Prof\.|Prof)\s+(?:med\.\s+)?[A-Za-z]+(?:\s+[A-Z]\b\.?)?(?:\s+[A-Za-z]+)*(?:\s*\([A-Za-z\s,.]+\))?",
-    r"\bConsultant\s*[:\-=~+]?\s*(?:Dr\.|Dr)?\s*[A-Za-z]+(?:\s+[A-Z]\b\.?)?(?:\s+[A-Za-z]+)*",
+    r"\b(?:Dr\.|Dr|Prof\.|Prof|Herr\s+Dr\.|Frau\s+Dr\.|Prof\.\s*Dr\.|Dr\.\s*med\.|Dott\.|Dott\.ssa)\s+(?:med\.\s+)?[A-Za-zÄÖÜäöüßÁÉÍÓÚÑáéíóúñ]+(?:\s+[A-ZÄÖÜÁÉÍÓÚÑ]\b\.?)?(?:\s+[A-Za-zÄÖÜäöüßÁÉÍÓÚÑáéíóúñ]+)*(?:\s*\([A-Za-z\s,.]+\))?",
+    r"\bConsultant\s*[:\-=~+]?\s*(?:Dr\.|Dr)?\s*[A-Za-zÄÖÜäöüßÁÉÍÓÚÑáéíóúñ]+(?:\s+[A-ZÄÖÜÁÉÍÓÚÑ]\b\.?)?(?:\s+[A-Za-zÄÖÜäöüßÁÉÍÓÚÑáéíóúñ]+)*",
     r"\bRef(?:erred)?[.,]?\s*By\s*[:\-=~+]?\s*[A-Za-z0-9\s.]+",
     r"\bTyped\s*By\s*[:\-=~+]?\s*[A-Za-z0-9\s.]+",
     r"\bCreated\s*By\s*[:\-=~+]?\s*[A-Za-z0-9\s.]+",
@@ -235,7 +235,9 @@ ADDRESS_ANCHORS = [
     r"\b(?:Address|Addr|Wohnanschrift|Dirección)\s*[:\-=~+]?\s*[^\n\r]+",
     r"\b(?:Surgery\s+Address|Practice\s+Stamp|Practice\s+Address)\s*[:\-=~+]?\s*[^\n\r]+",
     r"\b(?:SEC|Sector)\s*\d+[\s,]+[A-Za-z]+",
-    r"\b\d+[A-Za-z0-9\-/]?[ \t]+[A-Za-z0-9\-]+(?:[ \t]+[A-Za-z0-9\-]+){0,5}[ \t]+(?:Street|St|Avenue|Ave|Drive|Dr|Road|Rd|Boulevard|Blvd|Court|Ct|Lane|Ln|Terrace|Colony|Market|Chowk|Way|Square|Sq|Place|Pl)\b",
+    r"\b\d+[A-Za-z0-9\-/]?[ \t]+[A-Za-z0-9\-]+(?:[ \t]+[A-Za-z0-9\-]+){0,5}[ \t]+(?:Street|St|Avenue|Ave|Drive|Dr|Road|Rd|Boulevard|Blvd|Court|Ct|Lane|Ln|Terrace|Colony|Market|Chowk|Way|Square|Sq|Place|Pl|Straße|Str|Weg|Platz|Allee|Gasse|Rue|Boulevard|Bd|Avenue|Av|Calle|Paseo|Via|Piazza)\b",
+    r"\b[A-ZÄÖÜÁÉÍÓÚÑ][a-zäöüßáéíóúñ]+(?:straße|str\.|strasse|weg|platz|allee|gasse)\s+\d+[a-zA-Z]?\b",
+    r"\b(?:Rue|Boulevard|Bd|Avenue|Av\.|Calle|Paseo|Via|Piazza)\s+(?:de\s+|del\s+|della\s+|di\s+)?[A-ZÄÖÜÁÉÍÓÚÑa-zäöüßáéíóúñ\s\-]+(?:\d+[a-zA-Z]?)?\b",
     r"\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}\b",
     r"\b(?:NSW|VIC|QLD|WA|SA|TAS|ACT|NT)\s+\d{4}\b",
     r"\b\d{5}\s+[A-ZÄÖÜ][a-zäöüß]+\b",
@@ -246,9 +248,9 @@ ADDRESS_ANCHORS = [
 
 DATE_ANCHORS = [
     r"\b\d{1,2}[/\-.][0-9]{1,2}[/\-.][0-9]{2,4}(?:\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:AM|PM))?)?",
-    r"\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\s\-_]\d{2,4}(?:\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:AM|PM))?)?",
-    r"\b\d{1,2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*-\d{2,4}(?:\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:AM|PM))?)?",
-    r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4}\b",
+    r"\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|Januar|Februar|März|Mai|Juni|Juli|Oktober|Dezember|Enero|Febrero|Marzo|Abril|Mayo|Junio|Julio|Agosto|Septiembre|Octubre|Noviembre|Diciembre|Janvier|Février|Mars|Avril|Mai|Juin|Juillet|Août|Septembre|Octobre|Novembre|Décembre)[a-z]*[\s\-_]\d{2,4}(?:\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:AM|PM))?)?",
+    r"\b\d{1,2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|Januar|Februar|März|Mai|Juni|Juli|Oktober|Dezember|Enero|Febrero|Marzo|Abril|Mayo|Junio|Julio|Agosto|Septiembre|Octubre|Noviembre|Diciembre|Janvier|Février|Mars|Avril|Mai|Juin|Juillet|Août|Septembre|Octobre|Novembre|Décembre)[a-z]*-\d{2,4}(?:\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:AM|PM))?)?",
+    r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|Januar|Februar|März|Mai|Juni|Juli|Oktober|Dezember|Enero|Febrero|Marzo|Abril|Mayo|Junio|Julio|Agosto|Septiembre|Octubre|Noviembre|Diciembre|Janvier|Février|Mars|Avril|Mai|Juin|Juillet|Août|Septembre|Octobre|Novembre|Décembre)[a-z]*\s+\d{1,2},?\s+\d{4}\b",
 ]
 
 CLINICAL_WHITELIST_PATTERNS = [
@@ -257,7 +259,7 @@ CLINICAL_WHITELIST_PATTERNS = [
     # Specific clinical drug substances & reference agents
     r"\b(?:Prednisone|Lialda|Omeprazole|Telmisartan|Amlodipine|Paracetamol|Triptans|Ibuprofen|Metformin|Amoxicillin|Azithromycin|Pantoprazole|Cefixime|Lipitor|Atorvastatin|Lisinopril|Salbutamol|Esomeprazole|Metoprolol|Metoprolol\s+Tartrate|Ramipril|Pantoprazol|Glimepiride|Rosuvastatin)\b",
     # Dosage units and pharmaceutical forms
-    r"\b(?:mg|mcg|micrograms|ml|gm|gram|tablet|tablets|capsule|capsules|syrup|suspension|drops|injection|ointment|gel|cream|patch|inhaler)\b",
+    r"\b(?:mg|mcg|micrograms|ml|gm|gram|tablet|tablets|tab|tabs|capsule|capsules|cap|caps|syrup|syp|suspension|drops|injection|inj|ointment|gel|cream|patch|inhaler)\b",
     # Administration instructions and clinical frequencies
     r"\b(?:Refill|Refil|daily|once\s+daily|twice\s+daily|thrice\s+daily|SOS|stat|PRN|meals|breakfast|bedtime|hs|tid|bid|od|qid|three\s+months|for\s+three\s+months|tablets\s+daily|Dispense\s+as\s+Written|DAW)\b",
     r"\b(?:Rx|Rp\.?|Prescription|Verordnungen|Advice|Treatment|ADVICE\s*/\s*TREATMENT|Directions|Instructions|INVESTIGATIONS|General\s+Local/\s*Systemic\s+Examination)\b",
