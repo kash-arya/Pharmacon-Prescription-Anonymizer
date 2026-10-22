@@ -22,6 +22,7 @@ try:
         DATE_ANCHORS,
         STATUTORY_ID_PATTERNS,
         is_whitelisted,
+        KEY_VALUE_ANCHORS,
     )
     from prescription_anonymizer.src.jurisdiction import JurisdictionDetector
     from prescription_anonymizer.src.ner_engine import LocalNEREngine
@@ -38,6 +39,7 @@ except ImportError:
         DATE_ANCHORS,
         STATUTORY_ID_PATTERNS,
         is_whitelisted,
+        KEY_VALUE_ANCHORS,
     )
     from src.jurisdiction import JurisdictionDetector
     from src.ner_engine import LocalNEREngine
@@ -54,6 +56,151 @@ class VectorPDFRedactor:
         self.padding_x = padding_x
         self.padding_y = padding_y
         self.ner_engine = LocalNEREngine()
+
+    def _reconstruct_visual_lines(self, words: List[Tuple]) -> List[Dict[str, Any]]:
+        visual_lines: List[List[Tuple[pymupdf.Rect, str]]] = []
+        for w in words:
+            rect = pymupdf.Rect(w[0], w[1], w[2], w[3])
+            txt = w[4]
+            mid = (rect.y0 + rect.y1) / 2.0
+            h = rect.height
+            placed = False
+            for line in visual_lines:
+                l_mid = sum((item[0].y0 + item[0].y1) / 2.0 for item in line) / len(line)
+                l_h = sum(item[0].height for item in line) / len(line)
+                min_h = min(h, l_h)
+                v_overlap = min(rect.y1, max(item[0].y1 for item in line)) - max(rect.y0, min(item[0].y0 for item in line))
+                if v_overlap > min_h * 0.45 and abs(mid - l_mid) < min_h * 0.35:
+                    line.append((rect, txt))
+                    placed = True
+                    break
+            if not placed:
+                visual_lines.append([(rect, txt)])
+
+        visual_lines.sort(key=lambda l: sum((item[0].y0 + item[0].y1) / 2.0 for item in l) / len(l))
+
+        line_objects = []
+        for l in visual_lines:
+            sw = sorted(l, key=lambda item: item[0].x0)
+            u_rect = sw[0][0]
+            for it in sw[1:]:
+                u_rect = u_rect | it[0]
+            line_str = " ".join(item[1] for item in sw)
+            line_objects.append({
+                "rect": u_rect,
+                "text": line_str,
+                "words": sw
+            })
+        return line_objects
+
+    def _expand_person_span_on_line(self, rect: pymupdf.Rect, line_objects: List[Dict[str, Any]]) -> pymupdf.Rect:
+        if not line_objects:
+            return rect
+
+        rect_mid_y = (rect.y0 + rect.y1) / 2.0
+        best_line = None
+        min_v_dist = float("inf")
+        for line in line_objects:
+            l_rect = line["rect"]
+            l_mid_y = (l_rect.y0 + l_rect.y1) / 2.0
+            v_dist = abs(rect_mid_y - l_mid_y)
+            if v_dist < max(18.0, l_rect.height * 0.6) and v_dist < min_v_dist:
+                min_v_dist = v_dist
+                best_line = line
+
+        if best_line is None:
+            return rect
+
+        words = best_line["words"]
+        if not words:
+            return rect
+
+        intersecting_indices = []
+        for i, (w_rect, w_txt) in enumerate(words):
+            inter = rect & w_rect
+            if not inter.is_empty and inter.get_area() > 0.15 * min(rect.get_area(), w_rect.get_area()):
+                intersecting_indices.append(i)
+            elif abs((w_rect.y0 + w_rect.y1)/2.0 - rect_mid_y) < max(12.0, w_rect.height * 0.5):
+                if not (w_rect.x1 < rect.x0 - 5 or w_rect.x0 > rect.x1 + 5):
+                    intersecting_indices.append(i)
+
+        if not intersecting_indices:
+            closest_idx = None
+            closest_dist = float("inf")
+            for i, (w_rect, w_txt) in enumerate(words):
+                dist = abs((w_rect.x0 + w_rect.x1)/2.0 - (rect.x0 + rect.x1)/2.0)
+                if dist < closest_dist and dist < 40.0:
+                    closest_dist = dist
+                    closest_idx = i
+            if closest_idx is not None:
+                intersecting_indices = [closest_idx]
+            else:
+                return rect
+
+        min_idx = min(intersecting_indices)
+        max_idx = max(intersecting_indices)
+
+        honorific_re = re.compile(
+            r"^(?:Mr|Mrs|Ms|Miss|Master|Baby|Shri|Smt|Herr|Frau|Fr\.|M\.|Mme|Mlle|Monsieur|Madame|Mademoiselle|Sr\.|Sra\.|Srta\.|Señor|Señora|Señorita|Sig\.|Sig\.ra|Signor|Signora|Dott\.|Dott\.ssa|Dr|Prof)\.?$",
+            re.IGNORECASE
+        )
+        initial_re = re.compile(r"^[A-ZÄÖÜÁÉÍÓÚÑ]\.?$")
+        name_token_re = re.compile(r"^[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ\-'.]*$")
+        stopwords = {
+            "AGE", "SEX", "MALE", "FEMALE", "DATE", "ADDRESS", "PHONE", "HOSPITAL", "CLINIC",
+            "RX", "RP", "TAB", "TABS", "TABLET", "TABLETS", "REFILL", "SIG", "DOSE", "DAILY",
+            "DIRECTIONS", "PATIENT", "NAME", "PT", "MRN", "UHID", "OPD", "IPD", "YEARS", "YRS",
+            "Y", "M", "F", "NORMAL", "DIAGNOSIS", "DEPARTMENT", "SURGERY", "MEDICINE", "REF", "BY"
+        }
+
+        def is_valid_name_token(token_str: str) -> bool:
+            clean = token_str.strip()
+            clean_alnum = re.sub(r"^[^\w]+|[^\w]+$", "", clean)
+            if not clean_alnum:
+                return False
+            upper = clean_alnum.upper()
+            if upper in stopwords:
+                return False
+            if is_whitelisted(clean):
+                return False
+            for patterns in KEY_VALUE_ANCHORS.values():
+                for pat in patterns:
+                    if re.search(pat, clean, re.IGNORECASE):
+                        if not honorific_re.match(clean):
+                            return False
+            if honorific_re.match(clean) or initial_re.match(clean) or name_token_re.match(clean):
+                return True
+            return False
+
+        curr_min = min_idx
+        for idx in range(min_idx - 1, -1, -1):
+            w_rect, w_txt = words[idx]
+            next_rect, _ = words[idx + 1]
+            gap = next_rect.x0 - w_rect.x1
+            if gap > 35:
+                break
+            if is_valid_name_token(w_txt):
+                curr_min = idx
+            else:
+                break
+
+        curr_max = max_idx
+        for idx in range(max_idx + 1, len(words)):
+            w_rect, w_txt = words[idx]
+            prev_rect, _ = words[idx - 1]
+            gap = w_rect.x0 - prev_rect.x1
+            if gap > 35:
+                break
+            if is_valid_name_token(w_txt):
+                curr_max = idx
+            else:
+                break
+
+        expanded_rect = pymupdf.Rect(rect)
+        for idx in range(curr_min, curr_max + 1):
+            expanded_rect = expanded_rect | words[idx][0]
+
+        return expanded_rect
 
     def find_pii_targets(self, doc: pymupdf.Document) -> List[RedactionTarget]:
         """Scan all pages and return bounding boxes of identified PII entities."""
@@ -73,6 +220,7 @@ class VectorPDFRedactor:
             # Extract word-level text with bboxes: (x0, y0, x1, y1, "word", block_no, line_no, word_no)
             words = page.get_text("words")
             text = page.get_text()
+            line_objects = self._reconstruct_visual_lines(words)
 
             # 1. Regex pattern scanning on line-level text
             for category, patterns in all_rules:
@@ -82,6 +230,8 @@ class VectorPDFRedactor:
                         # Search for instances of the matched phrase on the page
                         rects = page.search_for(matched_str)
                         for r in rects:
+                            if category in ("PATIENT_NAME", "DOCTOR_INFO"):
+                                r = self._expand_person_span_on_line(r, line_objects)
                             bbox = BoundingBox(x0=r.x0, y0=r.y0, x1=r.x1, y1=r.y1)
                             targets.append(RedactionTarget(
                                 page_number=page_idx + 1,
@@ -175,6 +325,8 @@ class VectorPDFRedactor:
                 if not is_whitelisted(matched_str) and len(matched_str) >= 3:
                     rects = page.search_for(matched_str)
                     for r in rects:
+                        if cand["category"] == "PATIENT_NAME":
+                            r = self._expand_person_span_on_line(r, line_objects)
                         bbox = BoundingBox(x0=r.x0, y0=r.y0, x1=r.x1, y1=r.y1)
                         targets.append(RedactionTarget(
                             page_number=page_idx + 1,

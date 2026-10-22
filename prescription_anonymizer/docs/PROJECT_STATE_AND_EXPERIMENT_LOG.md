@@ -127,7 +127,7 @@ Pharmacon is a high-precision, layout-agnostic de-identification engine engineer
 ---
 
 ### Incident C: Purge of Benchmark Overfitting & Zero Test-Data Leakage
-* **Symptom:** Codebase audit revealed test-case ground-truth names, hospital headers, and specific IDs (`GOYAL`, `CLINIC_HEADERS`, `Kurukshetra`, `Bollinger`, `APL-2026`, `7115207313`) had been introduced as hardcoded regex shortcuts in `src/entities.py` and `src/image_redactor.py`.
+* **Symptom:** Codebase audit revealed test-case ground-truth names, hospital headers, and specific sample identifier tokens had been introduced as hardcoded regex shortcuts in `src/entities.py` and `src/image_redactor.py`.
 * **Root Cause:** Ad-hoc debugging of individual test cases led to synthetic rules that failed to generalize.
 * **Engineering Fix:**
   1. Executed strict audit purging 100% of hardcoded test strings from all `.py` files in `src/`.

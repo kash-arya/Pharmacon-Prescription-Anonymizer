@@ -451,6 +451,11 @@ async def anonymize_batch_archive(
         with open(archive_input_path, "wb") as f:
             f.write(content)
         with zipfile.ZipFile(archive_input_path, "r") as zf:
+            for member in zf.infolist():
+                # Prevent Zip-Slip directory traversal vulnerability
+                resolved_target = os.path.abspath(os.path.join(in_extract_dir, member.filename))
+                if not (resolved_target == os.path.abspath(in_extract_dir) or resolved_target.startswith(os.path.abspath(in_extract_dir) + os.sep)):
+                    raise HTTPException(status_code=400, detail=f"Archive contains illegal path (Zip-Slip attempt): {member.filename}")
             zf.extractall(in_extract_dir)
     except HTTPException:
         _cleanup_dir(temp_dir)
@@ -483,10 +488,25 @@ async def anonymize_batch_archive(
     batch_reports = []
     total_redactions = 0
 
+    # Detect filename collisions across subdirectories
+    name_counts: Dict[str, int] = {}
+    for full_p, rel_p, fname, ext in found_files:
+        base_cand = f"{os.path.splitext(fname)[0]}_anonymized{ext}"
+        name_counts[base_cand] = name_counts.get(base_cand, 0) + 1
+
     for full_p, rel_p, fname, ext in found_files:
         name_no_ext = os.path.splitext(fname)[0]
-        out_fname = f"{name_no_ext}_anonymized{ext}"
+        flat_name = f"{name_no_ext}_anonymized{ext}"
+
+        # If collision exists across folders, preserve subfolder path; keep flat when unique
+        if name_counts[flat_name] > 1:
+            rel_dir = os.path.dirname(rel_p)
+            out_fname = os.path.join(rel_dir, flat_name) if rel_dir else flat_name
+        else:
+            out_fname = flat_name
+
         out_file_path = os.path.join(out_redact_dir, out_fname)
+        os.makedirs(os.path.dirname(out_file_path), exist_ok=True)
 
         try:
             structure = inspect_pdf_structure(full_p)
