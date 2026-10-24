@@ -22,6 +22,7 @@ try:
         DATE_ANCHORS,
         STATUTORY_ID_PATTERNS,
         is_whitelisted,
+        _COMPILED_WHITELIST,
         KEY_VALUE_ANCHORS,
     )
     from prescription_anonymizer.src.jurisdiction import JurisdictionDetector
@@ -39,6 +40,7 @@ except ImportError:
         DATE_ANCHORS,
         STATUTORY_ID_PATTERNS,
         is_whitelisted,
+        _COMPILED_WHITELIST,
         KEY_VALUE_ANCHORS,
     )
     from src.jurisdiction import JurisdictionDetector
@@ -205,138 +207,246 @@ class VectorPDFRedactor:
     def find_pii_targets(self, doc: pymupdf.Document) -> List[RedactionTarget]:
         """Scan all pages and return bounding boxes of identified PII entities."""
         targets: List[RedactionTarget] = []
-
-        all_rules = [
-            ("PATIENT_NAME", PATIENT_NAME_ANCHORS),
-            ("DEMOGRAPHIC", DEMOGRAPHIC_ANCHORS),
-            ("IDENTIFIER", IDENTIFIER_ANCHORS),
-            ("CONTACT", CONTACT_ANCHORS),
-            ("DOCTOR_INFO", DOCTOR_ANCHORS),
-            ("DATE", DATE_ANCHORS),
-            ("ADDRESS", ADDRESS_ANCHORS),
-        ]
+        all_whitelisted_rects: List[pymupdf.Rect] = []
 
         for page_idx, page in enumerate(doc):
-            # Extract word-level text with bboxes: (x0, y0, x1, y1, "word", block_no, line_no, word_no)
             words = page.get_text("words")
-            text = page.get_text()
+            full_text = page.get_text()
             line_objects = self._reconstruct_visual_lines(words)
 
-            # 1. Regex pattern scanning on line-level text
-            for category, patterns in all_rules:
-                for pattern in patterns:
-                    for match in re.finditer(pattern, text, re.IGNORECASE):
-                        matched_str = match.group(0).strip()
-                        # Search for instances of the matched phrase on the page
-                        rects = page.search_for(matched_str)
-                        for r in rects:
-                            if category in ("PATIENT_NAME", "DOCTOR_INFO"):
-                                r = self._expand_person_span_on_line(r, line_objects)
-                            bbox = BoundingBox(x0=r.x0, y0=r.y0, x1=r.x1, y1=r.y1)
-                            targets.append(RedactionTarget(
-                                page_number=page_idx + 1,
-                                category=category,
-                                raw_text=matched_str,
-                                bbox=bbox,
-                                confidence=0.98,
-                                engine="vector_rule"
-                            ))
-
-            # 2. Statutory National Identifiers (US, UK, AU, EU, IN)
-            for pattern, category in STATUTORY_ID_PATTERNS:
-                for match in re.finditer(pattern, text, re.IGNORECASE):
-                    matched_str = match.group(0).strip()
-                    rects = page.search_for(matched_str)
-                    if not rects and match.groups():
-                        rects = page.search_for(match.group(1).strip())
-                    for r in rects:
-                        bbox = BoundingBox(x0=r.x0, y0=r.y0, x1=r.x1, y1=r.y1)
-                        targets.append(RedactionTarget(
-                            page_number=page_idx + 1,
-                            category=category,
-                            raw_text=matched_str,
-                            bbox=bbox,
-                            confidence=0.99,
-                            engine="statutory_rule"
-                        ))
-
-            # 3. Specific field-value boundary expansion:
-            # A. Rightward expansion for patient name labels
-            name_label_rects = (
-                page.search_for("Patient Name:") +
-                page.search_for("PATIENT NAME:") +
-                page.search_for("Name:") +
-                page.search_for("Surname:") +
-                page.search_for("Forename(s):") +
-                page.search_for("Forename:")
+            # Detect Clinical Zone (Rx / Rp.) boundaries
+            clinical_hdr_re = re.compile(
+                r"^\s*(?:Rx\b|Rp\.?\b|Verordnungen\b|Medications?\b|Prescription\b|Diagnosis\b)",
+                re.IGNORECASE
             )
-            for n_rect in name_label_rects:
-                # Value area: from end of label up to 200 pts rightward on same line
-                val_rect = pymupdf.Rect(n_rect.x1 + 2, n_rect.y0 - 2, min(page.rect.width - 40, n_rect.x1 + 180), n_rect.y1 + 2)
-                targets.append(RedactionTarget(
-                    page_number=page_idx + 1,
-                    category="PATIENT_NAME_VALUE",
-                    raw_text="[NAME_FIELD_VALUE]",
-                    bbox=BoundingBox(x0=val_rect.x0, y0=val_rect.y0, x1=val_rect.x1, y1=val_rect.y1),
-                    confidence=0.99,
-                    engine="vector_geometry"
-                ))
+            numbered_med_re = re.compile(
+                r"^\s*1\.\s+(?:Tab\.?|Cap\.?|Capsule|Tablet|Inhaler|[A-Z][a-z]{3,})\b",
+                re.IGNORECASE
+            )
+            clinical_y0 = None
+            for l in line_objects:
+                if clinical_hdr_re.search(l["text"]) or numbered_med_re.search(l["text"]):
+                    clinical_y0 = l["rect"].y0
+                    break
+            if clinical_y0 is None:
+                for w in words:
+                    if re.match(r"^(?:Rx|Rp\.?)$", w[4], re.I):
+                        clinical_y0 = w[1]
+                        break
+            if clinical_y0 is None:
+                clinical_y0 = page.rect.height * 0.40
 
-            # B. Downward expansion for German Muster 16 (patient name printed beneath label)
-            german_name_rects = page.search_for("Name, Vorname")
-            for g_rect in german_name_rects:
-                val_below = pymupdf.Rect(g_rect.x0, g_rect.y1, min(page.rect.width - 20, g_rect.x0 + 200), g_rect.y1 + 18)
-                targets.append(RedactionTarget(
-                    page_number=page_idx + 1,
-                    category="PATIENT_NAME_VALUE",
-                    raw_text="[MUSTER16_NAME_VALUE]",
-                    bbox=BoundingBox(x0=val_below.x0, y0=val_below.y0, x1=val_below.x1, y1=val_below.y1),
-                    confidence=0.99,
-                    engine="vector_geometry"
-                ))
-
-            # C. Prescriber / Doctor / Pharmacist Signatures
-            sig_labels = [
-                "PRESCRIBER SIGNATURE",
-                "Prescriber Signature",
-                "Doctor Signature",
-                "Doctor's Signature",
-                "Doctor Signature & Stamp",
-                "Pharmacist Signature",
-                "Unterschrift des Arztes",
-                "Authorized Prescriber Signature"
+            footer_marker_re = re.compile(
+                r"\b(?:Prescriber(?:'s|’s)?\s*Signature|Signature\s+of\s+Prescriber|Doctor(?:'s|’s)?\s*Signature|"
+                r"Physician(?:'s|’s)?\s*Signature|Doctor\s+Name\b|Doctor's\s+Stamp|Doctor\s+Signature\s*&|"
+                r"Unterschrift(?:\s+des\s+Arztes)?\b|Firma(?:\s+(?:del\s+)?m[eé]dico)?|Certifying\s+Practitioner|"
+                r"Pharmacy\s+Dispenser|For\s+Dispenser|Dispense\s+Date|Date\s+of\s+Prescribing|GMC\s*No|AHPRA\s*No)\b",
+                re.IGNORECASE
+            )
+            footer_candidates = [
+                l["rect"].y0 for l in line_objects
+                if l["rect"].y0 > clinical_y0 + 15 and footer_marker_re.search(l["text"])
             ]
-            for sig_lbl in sig_labels:
-                for s_rect in page.search_for(sig_lbl):
-                    sig_box = pymupdf.Rect(s_rect.x0 - 15, s_rect.y0 - 26, max(s_rect.x1 + 15, s_rect.x0 + 120), s_rect.y0 + 2)
-                    targets.append(RedactionTarget(
-                        page_number=page_idx + 1,
-                        category="DOCTOR_SIGNATURE",
-                        raw_text="[SIGNATURE_VALUE]",
-                        bbox=BoundingBox(x0=sig_box.x0, y0=sig_box.y0, x1=sig_box.x1, y1=sig_box.y1),
-                        confidence=0.99,
-                        engine="signature_detector"
-                    ))
+            footer_y0 = min(footer_candidates) if footer_candidates else page.rect.height * 0.82
 
-            # D. Local spaCy NER for unanchored Persons, Locations, and Organizations
-            ner_candidates = self.ner_engine.find_entities(text)
+            stamp_box_re = re.compile(
+                r"\b(?:Vertragsarztstempel|Arztstempel|Praxisstempel|Stamp\s*&\s*Signature|Doctor(?:'s|’s)?\s*Stamp)\b",
+                re.IGNORECASE
+            )
+            right_stamp_column_x0 = page.rect.width
+            stamp_box_y0 = None
+            for l in line_objects:
+                if stamp_box_re.search(l["text"]) and l["rect"].x0 > page.rect.width * 0.45:
+                    right_stamp_column_x0 = l["rect"].x0 - 15.0
+                    stamp_box_y0 = l["rect"].y0 - 5.0
+                    break
+
+            def is_in_clinical_zone(r: pymupdf.Rect) -> bool:
+                return (clinical_y0 - 4.0 <= r.y0 and r.y1 <= footer_y0 + 4.0 and r.x0 < right_stamp_column_x0)
+
+            page_whitelisted: List[pymupdf.Rect] = []
+            for l in line_objects:
+                if is_in_clinical_zone(l["rect"]):
+                    page_whitelisted.append(l["rect"])
+            all_whitelisted_rects.extend(page_whitelisted)
+
+            def add_target(rect: pymupdf.Rect, category: str, text: str, engine: str, conf: float = 0.98):
+                if is_in_clinical_zone(rect):
+                    return
+                for wr in page_whitelisted:
+                    inter = rect & wr
+                    if not inter.is_empty and inter.get_area() > 0.05 * min(rect.get_area(), wr.get_area()):
+                        return
+                for existing in targets:
+                    if existing.page_number == page_idx + 1:
+                        ex_r = pymupdf.Rect(existing.bbox.x0, existing.bbox.y0, existing.bbox.x1, existing.bbox.y1)
+                        inter = rect & ex_r
+                        if not inter.is_empty and inter.get_area() > 0.75 * max(rect.get_area(), ex_r.get_area()):
+                            return
+                targets.append(RedactionTarget(
+                    page_number=page_idx + 1,
+                    category=category,
+                    raw_text=text.strip() if text else category,
+                    bbox=BoundingBox(x0=rect.x0, y0=rect.y0, x1=rect.x1, y1=rect.y1),
+                    confidence=conf,
+                    engine=engine
+                ))
+
+            # 1. Doctor Stamp Box Target (Muster 16 right-side column)
+            if stamp_box_y0 is not None:
+                for l in line_objects:
+                    if l["rect"].x0 >= right_stamp_column_x0 - 5.0 and l["rect"].y1 >= stamp_box_y0:
+                        add_target(l["rect"], "DOCTOR_STAMP", l["text"], engine="stamp_box_detector")
+
+            # 2. Key-Value Anchor Processing outside Clinical Zone
+            for l_idx, line in enumerate(line_objects):
+                if is_in_clinical_zone(line["rect"]):
+                    continue
+                if stamp_box_y0 is not None and line["rect"].x0 >= right_stamp_column_x0 - 5.0 and line["rect"].y1 >= stamp_box_y0:
+                    continue
+
+                l_text = line["text"]
+                l_words = line["words"]
+                line_mid = (line["rect"].y0 + line["rect"].y1) / 2.0
+
+                found_anchors = []
+                for cat, patterns in KEY_VALUE_ANCHORS.items():
+                    for pat in patterns:
+                        for m in re.finditer(pat, l_text, re.IGNORECASE):
+                            found_anchors.append((m.start(), m.end(), cat, m.group(0)))
+
+                found_anchors.sort(key=lambda x: (x[0], -(x[1] - x[0])))
+                non_overlapping = []
+                last_end = -1
+                for s, e, cat, kw in found_anchors:
+                    if s >= last_end:
+                        non_overlapping.append((s, e, cat, kw))
+                        last_end = e
+
+                if non_overlapping:
+                    for i, (s, e, cat, kw) in enumerate(non_overlapping):
+                        next_bound = len(l_text)
+                        if i + 1 < len(non_overlapping):
+                            next_bound = min(next_bound, non_overlapping[i+1][0])
+
+                        # Segment end stops at next pipe delimiter or next anchor
+                        pipe_pos = l_text.find("|", e)
+                        if pipe_pos != -1 and pipe_pos < next_bound:
+                            seg_end = pipe_pos + 1
+                        else:
+                            seg_end = next_bound
+
+                        seg_text = l_text[s:seg_end].strip()
+                        raw_rects = page.search_for(seg_text)
+                        matched_r = [r for r in raw_rects if abs((r.y0 + r.y1)/2.0 - line_mid) < 8.0]
+                        if matched_r:
+                            u_r = matched_r[0]
+                            for mr in matched_r[1:]:
+                                u_r = u_r | mr
+                            add_target(u_r, cat, seg_text, engine="vector_kv_anchor")
+                        else:
+                            # Fallback keyword + value bounding box
+                            kw_rects = [r for r in page.search_for(kw) if abs((r.y0 + r.y1)/2.0 - line_mid) < 8.0]
+                            if kw_rects:
+                                ak_r = kw_rects[0]
+                                end_x = line["rect"].x1
+                                if i + 1 < len(non_overlapping):
+                                    nxt_rects = [r for r in page.search_for(non_overlapping[i+1][3]) if abs((r.y0 + r.y1)/2.0 - line_mid) < 8.0]
+                                    if nxt_rects:
+                                        end_x = nxt_rects[0].x0 - 4.0
+                                for w in l_words:
+                                    if w[1] == "|" and w[0].x0 > ak_r.x1 and w[0].x0 < end_x:
+                                        end_x = w[0].x1 + 2.0
+                                        break
+                                u_r = pymupdf.Rect(ak_r.x0 - 2, line["rect"].y0 - 2, end_x, line["rect"].y1 + 2)
+                                add_target(u_r, cat, seg_text, engine="vector_kv_anchor")
+
+                        # Multi-line value under label (e.g. Patient: \n Name)
+                        val_str = l_text[e:seg_end].strip().lstrip(":-=~+ ")
+                        is_sublabel = bool(re.search(r"^\s*\(.*?(?:forename|address|vorname|geb|name|anschrift).*?\)\s*$", val_str, re.IGNORECASE))
+                        if not val_str or is_sublabel:
+                            if l_idx + 1 < len(line_objects):
+                                nxt_l = line_objects[l_idx + 1]
+                                if not is_in_clinical_zone(nxt_l["rect"]):
+                                    nxt_txt = nxt_l["text"].strip()
+                                    if not any(pat.search(nxt_txt) for pat in _COMPILED_WHITELIST) and not clinical_hdr_re.search(nxt_txt):
+                                        add_target(nxt_l["rect"], cat, nxt_txt, engine="vector_multiline_anchor")
+
+            # 3. Header Facility & Provider Rule (above clinical_y0)
+            facility_re = re.compile(
+                r"\b(?:Hospital|Clinic|Imaging|Diagnostics?|Institute|Centre|Center|Medical|Healthcare|Alliance|Department|Ambulatory|Surgery|Practice|Optical|Optometry|Vision|Eye\s+Care|Dental|Pharmacy|Chemist|Praxis|Klinik|Apotheke)\b",
+                re.IGNORECASE
+            )
+            degree_re = re.compile(
+                r"\b(?:M\.?B\.?B\.?S|M\.?D|M\.?S|D\.?M\.?R\.?D|D\.?N\.?B|F\.?R\.?C\.?R|Regn?\.?|MCI|NMC|MBChB|MRCGP|FRACGP|AHPRA)\b",
+                re.IGNORECASE
+            )
+            for line in line_objects:
+                if line["rect"].y1 < clinical_y0:
+                    l_text = line["text"]
+                    if facility_re.search(l_text) or degree_re.search(l_text):
+                        if not any(pat.search(l_text) for pat in _COMPILED_WHITELIST):
+                            add_target(line["rect"], "CLINIC_FACILITY", l_text, engine="header_facility_rule")
+
+            # 4. Statutory National Identifiers
+            for reg, cat in STATUTORY_ID_PATTERNS:
+                for match in re.finditer(reg, full_text, re.IGNORECASE):
+                    m_str = match.group(0).strip()
+                    if not is_whitelisted(m_str) and len(m_str) > 2:
+                        rects = page.search_for(m_str)
+                        if not rects and match.groups():
+                            rects = page.search_for(match.group(1).strip())
+                        for r in rects:
+                            add_target(r, cat, m_str, engine="statutory_rule")
+
+            # 5. Full address lines and standalone regexes outside clinical zone
+            address_line_re = re.compile(
+                r"\b\d+\s+[A-Za-z0-9\-.,]+(?:\s+[A-Za-z0-9\-.,]+)*\s+(?:Street|St|Avenue|Ave|Drive|Dr|Road|Rd|Boulevard|Blvd|Court|Ct|Lane|Ln|Terrace|Colony|Market|Chowk|Way|Square|Sq|Place|Pl|Straße|Str|Weg|Platz|Allee|Gasse|Rue|Bd|Calle|Paseo|Via|Piazza)\b",
+                re.IGNORECASE
+            )
+            for line in line_objects:
+                if not is_in_clinical_zone(line["rect"]) and address_line_re.search(line["text"]):
+                    if not any(pat.search(line["text"]) for pat in _COMPILED_WHITELIST):
+                        add_target(line["rect"], "ADDRESS", line["text"], engine="address_line_rule")
+
+            standalone_regs = [
+                ("URL", re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)),
+                ("CONTACT_FAX_PHONE", re.compile(r"\b(?:Fax|Tel|Phone|Mobile)\.?\s*[:\-=~+]?\s*[\d\-\s/()+]{5,20}\b|\b\d{3}[\-\s.]\d{3}[\-\s.]\d{4}\b", re.IGNORECASE)),
+                ("ADDRESS_POSTCODE", re.compile(r"\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}\b|\bVIC\s+\d{4}\b|\b\d{5}(?:-\d{4})?\b")),
+                ("POLICY_NUMBER", re.compile(r"\bPolicy\s*[:\-=~+]?\s*[A-Z0-9-]+\b", re.IGNORECASE)),
+                ("SCHEME_HEADER", re.compile(r"\b(?:AUSTRALIAN\s+PHARMACEUTICAL\s+BENEFITS\s+SCHEME\s*\(PBS\)|Standard\s+Ambulatory\s+Prescription\s+Form\s*[—·]\s*Medicare\s+Australia|PRESCRIPTION\s+FORM\s*-\s*FP10SS)\b", re.IGNORECASE)),
+            ]
+            for cat, reg in standalone_regs:
+                for match in reg.finditer(full_text):
+                    m_str = match.group(0).strip()
+                    if not any(pat.search(m_str) for pat in _COMPILED_WHITELIST) and len(m_str) > 2:
+                        for r in page.search_for(m_str):
+                            add_target(r, cat, m_str, engine="standalone_regex")
+
+            # 6. Prescriber / Doctor / Pharmacist Signatures & Footers
+            for line in line_objects:
+                if line["rect"].y0 >= footer_y0 - 5.0:
+                    l_text = line["text"]
+                    if not any(pat.search(l_text) for pat in _COMPILED_WHITELIST):
+                        add_target(line["rect"], "DOCTOR_INFO", l_text, engine="footer_zone_rule")
+                elif not is_in_clinical_zone(line["rect"]):
+                    if re.match(r"^[\s|•·—_-]+$", line["text"]):
+                        add_target(line["rect"], "DELIMITER", line["text"], engine="delimiter_cleanup")
+
+            # 7. Local spaCy NER strictly outside Clinical Zone
+            ner_candidates = self.ner_engine.find_entities(full_text)
             for cand in ner_candidates:
-                matched_str = cand["text"]
-                if not is_whitelisted(matched_str) and len(matched_str) >= 3:
-                    rects = page.search_for(matched_str)
-                    for r in rects:
-                        if cand["category"] == "PATIENT_NAME":
-                            r = self._expand_person_span_on_line(r, line_objects)
-                        bbox = BoundingBox(x0=r.x0, y0=r.y0, x1=r.x1, y1=r.y1)
-                        targets.append(RedactionTarget(
-                            page_number=page_idx + 1,
-                            category=cand["category"],
-                            raw_text=matched_str,
-                            bbox=bbox,
-                            confidence=0.95,
-                            engine="spacy_ner"
-                        ))
+                m_str = cand["text"]
+                if any(pat.search(m_str) for pat in _COMPILED_WHITELIST) or is_whitelisted(m_str) or len(m_str) < 3:
+                    continue
+                for r in page.search_for(m_str):
+                    if is_in_clinical_zone(r):
+                        continue
+                    if cand["category"] == "PATIENT_NAME":
+                        r = self._expand_person_span_on_line(r, line_objects)
+                    add_target(r, cand["category"], m_str, engine="spacy_ner")
 
+        self._last_whitelisted_rects = all_whitelisted_rects
         return targets
 
     def redact(self, input_pdf_path: str, output_pdf_path: str, jurisdiction: str = "AUTO") -> Dict[str, Any]:
@@ -349,8 +459,9 @@ class VectorPDFRedactor:
         resolved_jur = JurisdictionDetector.resolve_jurisdiction(full_doc_text, jurisdiction)
 
         targets = self.find_pii_targets(doc)
+        whitelisted_rects = getattr(self, "_last_whitelisted_rects", [])
 
-        # Apply redactions page by page
+        # Apply redactions page by page with 0 pt overlap against whitelisted clinical text
         for t in targets:
             page = doc[t.page_number - 1]
             rect = pymupdf.Rect(
@@ -359,8 +470,27 @@ class VectorPDFRedactor:
                 t.bbox.x1 + self.padding_x,
                 t.bbox.y1 + self.padding_y
             )
-            # Add redaction annotation (solid black fill, zero stroke)
-            page.add_redact_annot(rect, fill=(0, 0, 0))
+
+            # Clamp rect away from whitelisted_rects
+            skip = False
+            for wr in whitelisted_rects:
+                inter = rect & wr
+                if inter.is_empty:
+                    continue
+                if inter.get_area() >= 0.85 * rect.get_area():
+                    skip = True
+                    break
+                if rect.y0 < wr.y0 and rect.y1 > wr.y0:
+                    rect.y1 = max(rect.y0, wr.y0 - 0.5)
+                elif rect.y1 > wr.y1 and rect.y0 < wr.y1:
+                    rect.y0 = min(rect.y1, wr.y1 + 0.5)
+                if rect.x0 < wr.x0 and rect.x1 > wr.x0:
+                    rect.x1 = max(rect.x0, wr.x0 - 0.5)
+                elif rect.x1 > wr.x1 and rect.x0 < wr.x1:
+                    rect.x0 = min(rect.x1, wr.x1 + 0.5)
+
+            if not skip and rect.width > 2 and rect.height > 2:
+                page.add_redact_annot(rect, fill=(0, 0, 0))
 
         # Physically erase text streams and render black rectangles
         for page in doc:
@@ -381,11 +511,21 @@ class VectorPDFRedactor:
         doc.save(output_pdf_path, garbage=4, deflate=True)
         doc.close()
 
+        from .forensics import ForensicAuditor
+        conf = ForensicAuditor.evaluate_redaction_confidence(
+            report={"redacted_targets": [t.model_dump() for t in targets]},
+            extracted_text=full_doc_text,
+            is_raster=False
+        )
+
         return {
             "input_file": input_pdf_path,
             "output_file": output_pdf_path,
             "jurisdiction": resolved_jur,
             "total_entities_redacted": len(targets),
             "total_redactions_applied": len(targets),
-            "redacted_targets": [t.model_dump() for t in targets]
+            "redacted_targets": [t.model_dump() for t in targets],
+            "confidence_score": conf["confidence_score"],
+            "triage_status": conf["triage_status"],
+            "review_reasons": conf["review_reasons"]
         }

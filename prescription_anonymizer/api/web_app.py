@@ -144,7 +144,7 @@ def get_web_app_html() -> str:
       <div id="result-section" class="hidden space-y-6">
 
         <!-- Summary KPI Bar -->
-        <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
+        <div class="grid grid-cols-2 md:grid-cols-6 gap-4">
           <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
             <div class="text-xs text-slate-400">Entities Redacted</div>
             <div id="kpi-count" class="text-2xl font-bold text-emerald-400 mt-1">0</div>
@@ -156,6 +156,10 @@ def get_web_app_html() -> str:
           <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
             <div class="text-xs text-slate-400">Jurisdiction Profile</div>
             <div id="kpi-jurisdiction" class="text-sm font-mono text-amber-400 mt-2 truncate">-</div>
+          </div>
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <div class="text-xs text-slate-400">Triage Verdict</div>
+            <div id="kpi-triage" class="text-xs font-bold font-mono text-emerald-400 mt-2 truncate">-</div>
           </div>
           <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
             <div class="text-xs text-slate-400">Processing Engine</div>
@@ -379,6 +383,18 @@ def get_web_app_html() -> str:
       document.getElementById('kpi-format').innerText = data.format_type;
       document.getElementById('kpi-jurisdiction').innerText = data.jurisdiction || 'GLOBAL';
       document.getElementById('kpi-engine').innerText = data.engine;
+
+      const triageEl = document.getElementById('kpi-triage');
+      if (triageEl) {
+        const status = data.triage_status || 'AUTO_APPROVED';
+        const score = data.confidence_score !== undefined ? data.confidence_score.toFixed(2) : '1.00';
+        triageEl.innerText = `${status} (${score})`;
+        if (status === 'AUTO_APPROVED') {
+          triageEl.className = 'text-xs font-bold font-mono text-emerald-400 mt-2 truncate';
+        } else {
+          triageEl.className = 'text-xs font-bold font-mono text-amber-400 mt-2 truncate';
+        }
+      }
 
       imgOrig.src = data.original_image;
       imgRed.src = data.redacted_image;

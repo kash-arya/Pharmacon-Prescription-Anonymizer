@@ -134,10 +134,10 @@ class MultimodalVisualGrounder:
         gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
         targets = []
 
-        # Restrict signature search to bottom-right corner (typical doctor signature zone: x > 55% width, y > 75% height)
+        # Restrict signature search to bottom-right corner (typical doctor signature zone: x > 45% width, y > 68% height)
         # and ensure it does not wipe horizontal printed lines
-        footer_y0 = int(h * 0.78)
-        footer_roi = gray[footer_y0:, int(w * 0.55):]
+        footer_y0 = int(h * 0.68)
+        footer_roi = gray[footer_y0:, int(w * 0.45):]
         if footer_roi.size == 0:
             return targets
 
@@ -153,11 +153,11 @@ class MultimodalVisualGrounder:
         for c in contours:
             x, y, cw, ch = cv2.boundingRect(c)
             area = cw * ch
-            # Strict signature heuristic: compact cursive stroke in doctor signing box
-            if 1500 < area < (w * h * 0.015) and 60 < cw < (w * 0.35) and 25 < ch < (h * 0.12):
+            # Signature heuristic: cursive stroke or doctor signature/stamp box in signing area
+            if 1500 < area < (w * h * 0.08) and 50 < cw < (w * 0.50) and 20 < ch < (h * 0.22):
                 aspect_ratio = float(cw) / ch
-                if 1.5 <= aspect_ratio <= 5.0:
-                    global_x0 = int(w * 0.55) + x
+                if 0.8 <= aspect_ratio <= 5.5:
+                    global_x0 = int(w * 0.45) + x
                     global_y0 = footer_y0 + y
                     targets.append(RedactionTarget(
                         page_number=page_num,

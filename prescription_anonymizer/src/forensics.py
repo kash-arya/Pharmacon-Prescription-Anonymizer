@@ -179,6 +179,90 @@ class ForensicAuditor:
             "attack_results": reconstruction_results
         }
 
+    @staticmethod
+    def evaluate_redaction_confidence(
+        report: Dict[str, Any],
+        extracted_text: str = "",
+        is_raster: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Computes a deterministic self-audit confidence score (0.0 to 1.0) and
+        triage verdict ('AUTO_APPROVED' vs 'NEEDS_HUMAN_REVIEW') with actionable reasons.
+        """
+        targets = report.get("redacted_targets", [])
+        categories = {t.get("category", "") for t in targets}
+
+        score = 0.0
+        review_reasons: List[str] = []
+
+        # 1. Core Slot Coverage (Up to +0.60)
+        has_patient = any(
+            c.startswith("PATIENT_NAME") or c.startswith("PATIENT_HONORIFIC") or c.startswith("IDENTIFIER")
+            for c in categories
+        )
+        if has_patient:
+            score += 0.30
+        else:
+            review_reasons.append("Missing patient name/ID redaction")
+
+        has_provider = any(
+            c.startswith("DOCTOR") or c.startswith("CLINIC") or c.startswith("HEADER_PROVIDER")
+            for c in categories
+        )
+        if has_provider:
+            score += 0.15
+        else:
+            review_reasons.append("Missing provider/clinic redaction")
+
+        has_demographic = any(
+            c.startswith("DATE") or c.startswith("DEMOGRAPHIC") or c.startswith("ADDRESS") or
+            c.startswith("PHONE") or c.startswith("CONTACT")
+            for c in categories
+        )
+        if has_demographic:
+            score += 0.15
+
+        # 2. OCR & Document Quality Check (+0.20)
+        words_count = len(extracted_text.split()) if extracted_text else 0
+        if words_count >= 15:
+            score += 0.20
+        elif is_raster:
+            score -= 0.25
+            review_reasons.append("Low OCR text density / blurry scan")
+        else:
+            score += 0.10
+
+        # 3. Residual Unmasked PII Check (+0.20)
+        statutory_or_contact_patterns = [
+            r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b",
+            r"\b\d{3}-\d{2}-\d{4}\b",
+            r"\b[A-Z]{2}\d{7}\b",
+        ]
+        has_residual_pii = False
+        target_texts = {t.get("raw_text", "").strip() for t in targets}
+        for pat in statutory_or_contact_patterns:
+            for m in re.finditer(pat, extracted_text):
+                matched = m.group(0).strip()
+                if not any(matched in tt for tt in target_texts):
+                    has_residual_pii = True
+                    break
+            if has_residual_pii:
+                break
+
+        if not has_residual_pii:
+            score += 0.20
+        else:
+            review_reasons.append("Potential unmasked residual PII detected")
+
+        final_score = round(max(0.0, min(1.0, score)), 2)
+        triage_status = "AUTO_APPROVED" if final_score >= 0.80 else "NEEDS_HUMAN_REVIEW"
+
+        return {
+            "confidence_score": final_score,
+            "triage_status": triage_status,
+            "review_reasons": review_reasons,
+        }
+
     def generate_compliance_certificate(
         self,
         document_path: str,

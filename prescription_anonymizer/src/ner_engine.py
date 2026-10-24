@@ -62,7 +62,13 @@ class LocalNEREngine:
         models = []
         if self._nlp_en is not None:
             models.append((self._nlp_en, "en"))
-        if self._nlp_xx is not None:
+
+        has_eu_markers = bool(re.search(
+            r"[äöüßéèêëàâîïôûùçñáíóúÁÉÍÓÚÑÄÖÜ]|\b(?:Rezept|Krankenkasse|Geb|Ausstellungsdatum|Vorname|Unterschrift|Arzt|Receta|Ordonnance|Médicament|Apotheke)\b",
+            text,
+            re.IGNORECASE
+        ))
+        if self._nlp_xx is not None and has_eu_markers:
             models.append((self._nlp_xx, "xx"))
 
         facility_regex = re.compile(
@@ -113,6 +119,20 @@ class LocalNEREngine:
                 if label in ("PERSON", "PER"):
                     if len(ent_text) < 4 or ent_text.upper() in stop_person:
                         continue
+                    if lang == "xx":
+                        line_start = text.rfind("\n", 0, ent.start_char)
+                        line_start = 0 if line_start == -1 else line_start + 1
+                        line_end = text.find("\n", ent.end_char)
+                        line_end = len(text) if line_end == -1 else line_end
+                        line_ctx = text[line_start:line_end]
+
+                        if re.search(r"\b(?:Rx|Rp\.?|Disp\.?|Take|Medikament|Tablette|Kapsel|Dosage|Sig\.?)\b", line_ctx, re.IGNORECASE):
+                            continue
+
+                        cap_words = sum(1 for w in ent_text.split() if w and w[0].isupper())
+                        is_name_header = bool(re.search(r"\b(?:Name|Patient|Herr|Frau|Dr|Doctor|Arzt|Unterschrift|Signature|Prescriber)\b", line_ctx, re.IGNORECASE))
+                        if cap_words < 2 and not is_name_header:
+                            continue
                     category = "PATIENT_NAME"
                 elif label in ("GPE", "LOC", "FAC"):
                     if len(ent_text) < 3 or ent_text.upper() in stop_address:
