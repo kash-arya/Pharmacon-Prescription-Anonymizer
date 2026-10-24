@@ -73,6 +73,9 @@ class AnonymizeJsonResponse(BaseModel):
     total_entities_redacted: int = Field(..., description="Total count of masked entities", examples=[14])
     redacted_targets: List[Dict[str, Any]] = Field(..., description="List of all redacted entity descriptors")
     data_uri: str = Field(..., description="Base64 Data URI of the sanitized binary")
+    confidence_score: Optional[float] = Field(1.0, description="Self-audit confidence score")
+    triage_status: Optional[str] = Field("AUTO_APPROVED", description="Triage verdict: AUTO_APPROVED or NEEDS_HUMAN_REVIEW")
+    review_reasons: Optional[List[str]] = Field(default_factory=list, description="Triage review reasons")
 
 
 class PreviewResponse(BaseModel):
@@ -85,6 +88,9 @@ class PreviewResponse(BaseModel):
     redacted_targets: List[Dict[str, Any]] = Field(..., description="List of all redacted entity descriptors")
     original_image: str = Field(..., description="High-resolution JPEG Base64 Data URI of original page")
     redacted_image: str = Field(..., description="High-resolution JPEG Base64 Data URI of redacted page")
+    confidence_score: Optional[float] = Field(1.0, description="Self-audit confidence score")
+    triage_status: Optional[str] = Field("AUTO_APPROVED", description="Triage verdict: AUTO_APPROVED or NEEDS_HUMAN_REVIEW")
+    review_reasons: Optional[List[str]] = Field(default_factory=list, description="Triage review reasons")
 
 
 class BatchFileReport(BaseModel):
@@ -303,7 +309,9 @@ async def anonymize_prescription(
                 "X-Redacted-Count": str(redacted_count),
                 "X-Format-Type": fmt,
                 "X-Jurisdiction": active_jurisdiction,
-                "X-Engine": engine_name
+                "X-Engine": engine_name,
+                "X-Confidence-Score": str(report.get("confidence_score", 1.0)),
+                "X-Triage-Status": str(report.get("triage_status", "AUTO_APPROVED"))
             }
         )
 
@@ -325,7 +333,10 @@ async def anonymize_prescription(
         "engine": engine_name,
         "total_entities_redacted": redacted_count,
         "redacted_targets": report.get("redacted_targets", []),
-        "data_uri": data_uri
+        "data_uri": data_uri,
+        "confidence_score": report.get("confidence_score", 1.0),
+        "triage_status": report.get("triage_status", "AUTO_APPROVED"),
+        "review_reasons": report.get("review_reasons", [])
     })
 
 
@@ -413,7 +424,10 @@ async def anonymize_prescription_preview(
         "total_entities_redacted": redacted_count,
         "redacted_targets": report.get("redacted_targets", []),
         "original_image": orig_b64,
-        "redacted_image": red_b64
+        "redacted_image": red_b64,
+        "confidence_score": report.get("confidence_score", 1.0),
+        "triage_status": report.get("triage_status", "AUTO_APPROVED"),
+        "review_reasons": report.get("review_reasons", [])
     })
 
 

@@ -144,11 +144,24 @@ def build_holdout_data(holdout_dir: str, temp_out_dir: str) -> Dict[str, Any]:
             report = redactor.redact(input_path, output_path, jurisdiction="AUTO")
             engine_name = "Local OCR Anchor Engine (PyMuPDF + Tesseract)"
 
+        # Mirror into data/masked_results/unseen_holdout/
+        try:
+            mirror_dir = os.path.join(REPO_ROOT, "data", "masked_results", "unseen_holdout")
+            os.makedirs(mirror_dir, exist_ok=True)
+            mirror_path = os.path.join(mirror_dir, f"{base}_MASKED{ext}")
+            import shutil
+            shutil.copyfile(output_path, mirror_path)
+        except Exception:
+            pass
+
         t1 = time.time()
         latency_ms = round((t1 - t0) * 1000.0, 1)
 
         detected_jur = report.get("jurisdiction", "GLOBAL")
         total_redacted = report.get("total_entities_redacted", len(report.get("redacted_targets", [])))
+        confidence_score = report.get("confidence_score", 1.0)
+        triage_status = report.get("triage_status", "AUTO_APPROVED")
+        review_reasons = report.get("review_reasons", [])
 
         is_image = ext.lower() in {".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".webp"}
         page_count = 1 if is_image else len(pymupdf.open(input_path))
@@ -191,6 +204,9 @@ def build_holdout_data(holdout_dir: str, temp_out_dir: str) -> Dict[str, Any]:
             "category": "Unseen Holdout Specimen",
             "tags": tags,
             "total_entities_redacted": total_redacted,
+            "confidence_score": confidence_score,
+            "triage_status": triage_status,
+            "review_reasons": review_reasons,
             "pages": pages_data
         })
 
@@ -198,6 +214,8 @@ def build_holdout_data(holdout_dir: str, temp_out_dir: str) -> Dict[str, Any]:
         "timestamp": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "total_documents": len(documents),
         "total_redactions": sum(d["total_entities_redacted"] for d in documents),
+        "auto_approved_count": sum(1 for d in documents if d.get("triage_status") == "AUTO_APPROVED"),
+        "needs_review_count": sum(1 for d in documents if d.get("triage_status") != "AUTO_APPROVED"),
         "documents": documents
     }
 
@@ -399,6 +417,16 @@ header {{
 .jur-EU {{ background-color: #064e3b; color: #a7f3d0; border: 1px solid #10b981; }}
 .jur-IN {{ background-color: #7c2d12; color: #fed7aa; border: 1px solid #f97316; }}
 .jur-GLOBAL {{ background-color: #1e293b; color: #cbd5e1; border: 1px solid #475569; }}
+
+.triage-badge {{
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-family: var(--font-mono);
+}}
+.triage-AUTO_APPROVED {{ background-color: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid #10b981; }}
+.triage-NEEDS_HUMAN_REVIEW {{ background-color: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid #f59e0b; }}
 
 .main-content {{
   flex: 1;
@@ -666,6 +694,9 @@ code {{
     <div class="kpi-pill">
       <span>Total Entities Redacted: <strong id="kpiTotalRedactions">{data['total_redactions']}</strong></span>
     </div>
+    <div class="kpi-pill">
+      <span>Triage: <strong style="color: #34d399;">{data.get('auto_approved_count', 0)} Approved</strong> / <strong style="color: #fbbf24;">{data.get('needs_review_count', 0)} Review</strong></span>
+    </div>
   </div>
 </header>
 
@@ -777,15 +808,21 @@ function renderSidebar() {{
     li.onclick = () => selectDocument(idx);
 
     const jurClass = "jur-" + (doc.jurisdiction || "GLOBAL");
+    const triageStatus = doc.triage_status || "AUTO_APPROVED";
+    const triageScore = doc.confidence_score !== undefined ? doc.confidence_score.toFixed(2) : "1.00";
     li.innerHTML = `
       <div class="doc-item-title">
         <span>${{escapeHtml(doc.title)}}</span>
-        <span class="jur-badge ${{jurClass}}">${{doc.jurisdiction}}</span>
+        <div style="display: flex; gap: 4px; align-items: center;">
+          <span class="jur-badge ${{jurClass}}">${{doc.jurisdiction}}</span>
+          <span class="triage-badge triage-${{triageStatus}}">${{triageStatus === "AUTO_APPROVED" ? "PASS" : "REV"}}</span>
+        </div>
       </div>
       <div class="doc-item-sub">${{doc.filename}} • <strong>${{doc.latency_ms}} ms</strong></div>
       <div class="tag-list">
         <span class="tag">${{doc.format_type}}</span>
         <span class="tag">${{doc.total_entities_redacted}} masked</span>
+        <span class="tag" style="color: ${{triageStatus === 'AUTO_APPROVED' ? 'var(--success)' : 'var(--warning)'}}; font-weight: 600;">${{triageScore}}</span>
       </div>
     `;
     list.appendChild(li);
@@ -821,8 +858,12 @@ function renderCurrentPage() {{
   document.getElementById("redDimensions").innerText = `${{page.width}} × ${{page.height}} px`;
 
   const jurClass = "jur-" + (doc.jurisdiction || "GLOBAL");
+  const triageStatus = doc.triage_status || "AUTO_APPROVED";
+  const triageScore = doc.confidence_score !== undefined ? doc.confidence_score.toFixed(2) : "1.00";
+  const triageReasons = (doc.review_reasons && doc.review_reasons.length > 0) ? ` • ${{escapeHtml(doc.review_reasons.join(", "))}}` : "";
   document.getElementById("activeDocBadgeGroup").innerHTML = `
     <span class="jur-badge ${{jurClass}}">${{doc.jurisdiction}} Profile</span>
+    <span class="triage-badge triage-${{triageStatus}}" style="margin-left: 8px;">${{triageStatus}} (${{triageScore}})${{triageReasons}}</span>
     <span class="tag" style="margin-left: 8px;">Latency: ${{doc.latency_ms}} ms</span>
     <span class="tag" style="margin-left: 4px;">Engine: ${{doc.engine}}</span>
   `;

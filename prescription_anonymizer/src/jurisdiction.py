@@ -23,7 +23,7 @@ JURISDICTION_SIGNATURES: Dict[str, List[re.Pattern]] = {
         re.compile(r"\bAge\s*D\.O\.B\b", re.IGNORECASE),
     ],
     "US": [
-        re.compile(r"\b(?:DEA(?:\s*No\.?)?|NPI|DEA#|California\s*Security|Tamper\s*Resistant)\b", re.IGNORECASE),
+        re.compile(r"\b(?:DEA(?:\s*No\.?)?|NPI|DEA#|Security\s*Prescription|Tamper\s*Resistant)\b", re.IGNORECASE),
         re.compile(r"\b(?:Refills?\s*[:\-=]?\s*(?:None|0|1|2|3|4|5|NR))\b", re.IGNORECASE),
         re.compile(r"\b(?:Dispense\s*as\s*Written|DAW)\b", re.IGNORECASE),
     ],

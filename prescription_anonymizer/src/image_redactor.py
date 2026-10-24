@@ -212,6 +212,22 @@ class LocalImageRedactor:
                         detected_candidates.append((pts.reshape(-1, 2), 0.0, float(y_start)))
 
             for pts, off_x, off_y in detected_candidates:
+                # Validate 1D barcode candidates: vertical-bar barcodes have mean(|dx|) > 2.2 * mean(|dy|)
+                pts_x = pts[:, 0] + off_x
+                pts_y = pts[:, 1] + off_y
+                roi_x0 = max(0, int(np.min(pts_x)))
+                roi_y0 = max(0, int(np.min(pts_y)))
+                roi_x1 = min(gray.shape[1], int(np.max(pts_x)))
+                roi_y1 = min(gray.shape[0], int(np.max(pts_y)))
+                if roi_x1 > roi_x0 + 10 and roi_y1 > roi_y0 + 10:
+                    roi = gray[roi_y0:roi_y1, roi_x0:roi_x1]
+                    sobel_x = cv2.Sobel(roi, cv2.CV_32F, 1, 0, ksize=3)
+                    sobel_y = cv2.Sobel(roi, cv2.CV_32F, 0, 1, ksize=3)
+                    mean_dx = float(np.mean(np.abs(sobel_x)))
+                    mean_dy = float(np.mean(np.abs(sobel_y)))
+                    if mean_dy > 0 and (mean_dx <= 2.2 * mean_dy):
+                        continue
+
                 pad = 10.0
                 x0 = max(0.0, float(np.min(pts[:, 0]) + off_x) * scale_x - pad)
                 y0 = max(0.0, float(np.min(pts[:, 1]) + off_y) * scale_y - pad)
@@ -238,10 +254,17 @@ class LocalImageRedactor:
 
         return boxes
 
-    def _get_enhanced_fullpage_ocr(self, page: pymupdf.Page, h_ratio: float = 0.45) -> Tuple[List[Any], pymupdf.Page, pymupdf.TextPage, pymupdf.Document]:
+    def _get_enhanced_fullpage_ocr(self, page: pymupdf.Page, h_ratio: float = 0.45, lang: Optional[str] = None) -> Tuple[List[Any], pymupdf.Page, pymupdf.TextPage, pymupdf.Document]:
         """Performs CLAHE adaptive contrast preprocessing, denoising, and unsharp masking."""
         max_pt = max(page.rect.width, page.rect.height)
-        effective_dpi = 72 if max_pt > 2000 else self.dpi
+        if max_pt < 550:
+            effective_dpi = 300
+        elif max_pt < 900:
+            effective_dpi = self.dpi if (page.rect.width >= 550 and page.rect.height >= 700) else 200
+        elif max_pt <= 2000:
+            effective_dpi = self.dpi
+        else:
+            effective_dpi = 72
         pix = page.get_pixmap(dpi=effective_dpi, clip=pymupdf.Rect(0, 0, page.rect.width, page.rect.height * h_ratio))
         arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape((pix.height, pix.width, pix.n))
         if pix.n == 4:
@@ -263,7 +286,7 @@ class LocalImageRedactor:
         tmp_doc = pymupdf.open()
         p_enh = tmp_doc.new_page(width=page.rect.width, height=page.rect.height * h_ratio)
         p_enh.insert_image(pymupdf.Rect(0, 0, page.rect.width, page.rect.height * h_ratio), stream=buf.tobytes())
-        ocr_lang = get_ocr_languages(self.tessdata_dir)
+        ocr_lang = lang if lang is not None else get_ocr_languages(self.tessdata_dir)
         tp_enh = p_enh.get_textpage_ocr(language=ocr_lang, dpi=effective_dpi, tessdata=self.tessdata_dir)
         words_enh = p_enh.get_text("words", textpage=tp_enh)
 
@@ -426,17 +449,394 @@ class LocalImageRedactor:
             })
         return line_objects
 
+    def _detect_handwritten_fill_in_zone(
+        self,
+        page_bgr: np.ndarray,
+        zone_rect: pymupdf.Rect,
+        scale_px_x: float,
+        scale_px_y: float,
+        whitelisted_rects: Optional[List[pymupdf.Rect]] = None
+    ) -> Optional[pymupdf.Rect]:
+        """
+        Detects handwritten cursive ink strokes inside a designated form-fill zone.
+        Removes printed form lines (horizontal/vertical grid borders) via morphological filters
+        and returns the tight bounding box of significant ink strokes in PDF point coordinates.
+        """
+        if zone_rect.width <= 4 or zone_rect.height <= 4:
+            return None
+
+        ix0 = max(0, int(zone_rect.x0 / scale_px_x))
+        iy0 = max(0, int(zone_rect.y0 / scale_px_y))
+        ix1 = min(page_bgr.shape[1], int(zone_rect.x1 / scale_px_x))
+        iy1 = min(page_bgr.shape[0], int(zone_rect.y1 / scale_px_y))
+
+        if ix1 <= ix0 + 10 or iy1 <= iy0 + 6:
+            return None
+
+        roi = page_bgr[iy0:iy1, ix0:ix1]
+        if roi.size == 0:
+            return None
+
+        roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        thresh = cv2.adaptiveThreshold(
+            roi_gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 21, 10
+        )
+
+        # Remove printed horizontal and vertical form grid/rule lines
+        horiz_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 1))
+        vert_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 25))
+        horiz_lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, horiz_kernel)
+        vert_lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, vert_kernel)
+        grid_lines = cv2.bitwise_or(horiz_lines, vert_lines)
+        grid_lines = cv2.dilate(grid_lines, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)), iterations=1)
+
+        # Non-line handwritten ink strokes
+        ink = cv2.bitwise_and(thresh, cv2.bitwise_not(grid_lines))
+        ink_pixels = int(cv2.countNonZero(ink))
+        total_pixels = roi.shape[0] * roi.shape[1]
+        ink_ratio = float(ink_pixels) / max(1, total_pixels)
+
+        if ink_pixels > 80 and 0.012 < ink_ratio < 0.65:
+            pts = cv2.findNonZero(ink)
+            if pts is not None:
+                bx, by, bw, bh = cv2.boundingRect(pts)
+                stroke_rect = pymupdf.Rect(
+                    max(zone_rect.x0, (ix0 + bx) * scale_px_x - 2),
+                    max(zone_rect.y0, (iy0 + by) * scale_px_y - 2),
+                    min(zone_rect.x1, (ix0 + bx + bw) * scale_px_x + 2),
+                    min(zone_rect.y1, (iy0 + by + bh) * scale_px_y + 2)
+                )
+                wl = whitelisted_rects or getattr(self, "_last_whitelisted_rects", [])
+                for wr in wl:
+                    inter = stroke_rect & wr
+                    if not inter.is_empty and inter.get_area() > 0.10 * min(stroke_rect.get_area(), wr.get_area()):
+                        return None
+                return stroke_rect
+        return None
+
+    def _parse_form_anchors_on_lines(
+        self,
+        line_objects: List[Dict[str, Any]],
+        search_page: pymupdf.Page,
+        textpage: pymupdf.TextPage,
+        page_bgr: np.ndarray,
+        scale_px_x: float,
+        scale_px_y: float,
+        add_target_fn: Any,
+        suffix: str = ""
+    ):
+        """
+        Unified multi-column key-value form parser running across OCR passes.
+        Supports:
+        - 1D horizontal proximity & fused token extraction
+        - 2D multi-row column table parsing for multi-line patient/address blocks
+        - Doctor/prescriber signature adjacent lines & ink box search
+        - OCR-independent spatial handwritten ink-fill detection
+        """
+        anchor_patterns = list(KEY_VALUE_ANCHORS.items())
+
+        for l_idx, l_obj in enumerate(line_objects):
+            l_text = l_obj["text"]
+            l_words = l_obj["words"]
+            line_rect = l_obj["rect"]
+
+            detected_anchors = []
+            line_mid = (line_rect.y0 + line_rect.y1) / 2.0
+            for cat, patterns in anchor_patterns:
+                for pat in patterns:
+                    for m in re.finditer(pat, l_text, re.IGNORECASE):
+                        kw = m.group(0)
+                        raw_rects = search_page.search_for(kw, textpage=textpage)
+                        kw_rects = sorted(
+                            [r for r in raw_rects if abs((r.y0 + r.y1) / 2.0 - line_mid) < max(20.0, line_rect.height * 0.4)],
+                            key=lambda r: r.x0
+                        )
+                        if kw_rects:
+                            kw_clusters = []
+                            curr_cluster = [kw_rects[0]]
+                            for r in kw_rects[1:]:
+                                if abs(r.x0 - curr_cluster[-1].x1) < 40:
+                                    curr_cluster.append(r)
+                                else:
+                                    kw_clusters.append(curr_cluster)
+                                    curr_cluster = [r]
+                            kw_clusters.append(curr_cluster)
+
+                            for cluster in kw_clusters:
+                                u_kw = cluster[0]
+                                for kr in cluster[1:]:
+                                    u_kw = u_kw | kr
+                                detected_anchors.append({
+                                    "cat": cat,
+                                    "kw": kw,
+                                    "rect": u_kw
+                                })
+
+            # Deduplicate sub-anchors
+            dedup_anchors = []
+            for a in detected_anchors:
+                is_sub = False
+                for other in detected_anchors:
+                    if a is not other:
+                        if (a["rect"] in other["rect"] and len(other["kw"]) > len(a["kw"])) or \
+                           (other["kw"].endswith(a["kw"]) and len(other["kw"]) > len(a["kw"])):
+                            is_sub = True
+                            break
+                if not is_sub:
+                    dedup_anchors.append(a)
+            detected_anchors = dedup_anchors
+            detected_anchors.sort(key=lambda a: a["rect"].x0)
+
+            # Clamping line rect with adjacent lines to prevent vertical line bleed
+            l_mid = sum((w[0].y0 + w[0].y1) / 2 for w in l_words) / len(l_words) if l_words else line_rect.y0
+            split_top = line_rect.y0
+            if l_idx > 0:
+                prev_words = line_objects[l_idx - 1]["words"]
+                prev_mid = sum((w[0].y0 + w[0].y1) / 2 for w in prev_words) / len(prev_words) if prev_words else line_objects[l_idx - 1]["rect"].y0
+                if l_mid > prev_mid:
+                    split_top = max(line_rect.y0, (prev_mid + l_mid) / 2.0)
+
+            split_bottom = line_rect.y1
+            if l_idx + 1 < len(line_objects):
+                nxt_words = line_objects[l_idx + 1]["words"]
+                nxt_mid = sum((w[0].y0 + w[0].y1) / 2 for w in nxt_words) / len(nxt_words) if nxt_words else line_objects[l_idx + 1]["rect"].y0
+                if nxt_mid > l_mid:
+                    split_bottom = min(line_rect.y1, (l_mid + nxt_mid) / 2.0)
+
+            for a_idx, anchor in enumerate(detected_anchors):
+                a_rect = anchor["rect"]
+                a_cat = anchor["cat"]
+                clamped_a_rect = pymupdf.Rect(
+                    max(0, a_rect.x0 - 2),
+                    max(split_top, a_rect.y0 - 2),
+                    a_rect.x1 + 2,
+                    min(split_bottom, a_rect.y1 + 2)
+                )
+                eng_anchor = f"form_anchor{suffix.lower()}"
+                add_target_fn(clamped_a_rect, f"{a_cat}_LABEL{suffix}", anchor["kw"], engine=eng_anchor)
+
+                # Prescriber/Doctor signature adjacent lines & signature ink
+                if re.search(r"\b(?:Signature\s+of\s+Prescriber|Unterschrift(?:\s+des\s+Arztes)?|Prescriber(?:'s|’s)?\s*Signature|Doctor(?:'s|’s)?\s*Signature|Firma(?:\s+(?:del\s+)?médico)?)\b", anchor["kw"], re.I):
+                    if l_idx + 1 < len(line_objects):
+                        nxt_line = line_objects[l_idx + 1]
+                        if nxt_line["rect"].y0 - line_rect.y1 <= 60:
+                            if not self.is_whitelisted(nxt_line["text"]) and re.search(r"[A-Za-z]{2,}", nxt_line["text"]):
+                                add_target_fn(nxt_line["rect"], "DOCTOR_NAME", nxt_line["text"], engine=f"doctor_signature_adjacent{suffix.lower()}")
+                    if l_idx > 0:
+                        prev_line = line_objects[l_idx - 1]
+                        if line_rect.y0 - prev_line["rect"].y1 <= 60:
+                            if not self.is_whitelisted(prev_line["text"]) and re.search(r"[A-Za-z]{2,}", prev_line["text"]):
+                                add_target_fn(prev_line["rect"], "DOCTOR_NAME", prev_line["text"], engine=f"doctor_signature_adjacent{suffix.lower()}")
+
+                    sig_boxes = [
+                        pymupdf.Rect(max(0, clamped_a_rect.x0 - 40), max(0, clamped_a_rect.y0 - 100), min(search_page.rect.width, clamped_a_rect.x1 + 120), clamped_a_rect.y0),
+                        pymupdf.Rect(max(0, clamped_a_rect.x0 - 40), clamped_a_rect.y1, min(search_page.rect.width, clamped_a_rect.x1 + 120), min(search_page.rect.height, clamped_a_rect.y1 + 100)),
+                    ]
+                    for s_box in sig_boxes:
+                        if s_box.width > 20 and s_box.height > 15:
+                            ix0 = max(0, int(s_box.x0 / scale_px_x))
+                            iy0 = max(0, int(s_box.y0 / scale_px_y))
+                            ix1 = min(page_bgr.shape[1], int(s_box.x1 / scale_px_x))
+                            iy1 = min(page_bgr.shape[0], int(s_box.y1 / scale_px_y))
+                            roi = page_bgr[iy0:iy1, ix0:ix1]
+                            if roi.size > 0:
+                                roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+                                thresh = cv2.adaptiveThreshold(roi_gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 25, 12)
+                                ink_pixels = cv2.countNonZero(thresh)
+                                if ink_pixels > 200 and (ink_pixels / roi.size) > 0.02:
+                                    add_target_fn(s_box, "DOCTOR_SIGNATURE", "[HANDWRITTEN_SIGNATURE]", engine=f"signature_anchor_ink{suffix.lower()}")
+
+                start_x = a_rect.x1 + 2
+                if a_idx + 1 < len(detected_anchors):
+                    end_x = max(start_x, detected_anchors[a_idx + 1]["rect"].x0 - 4)
+                else:
+                    end_x = line_rect.x1 + 4
+
+                # Check for OCR token fusion
+                fused_token = None
+                for w in l_words:
+                    if w[0].x0 <= a_rect.x0 + 8 and w[0].x1 > a_rect.x1 + 6:
+                        fused_rect = pymupdf.Rect(start_x, w[0].y0, min(end_x, w[0].x1), w[0].y1)
+                        fused_val = re.sub(r"^.*?[:\-=~+/|]+", "", w[1]).strip()
+                        clean_fused = re.sub(r"[:\-=~+._\s|]", "", fused_val)
+                        if len(clean_fused) > 1 and not self.is_whitelisted(fused_val):
+                            fused_token = (fused_rect, fused_val)
+                        break
+
+                normal_words = [w for w in l_words if start_x - 4 <= w[0].x0 <= end_x]
+                if fused_token:
+                    candidate_words = [fused_token] + normal_words
+                else:
+                    candidate_words = normal_words
+
+                same_line_words = []
+                prev_x = a_rect.x1
+                for sw_rect, sw_txt in candidate_words:
+                    gap = sw_rect.x0 - prev_x
+                    if same_line_words and gap > 120:
+                        break
+                    if not same_line_words and gap > 180:
+                        break
+                    same_line_words.append((sw_rect, sw_txt))
+                    prev_x = sw_rect.x1
+
+                same_line_text = " ".join(w[1] for w in same_line_words)
+                clean_val = re.sub(r"[:\-=~+._\s|]", "", same_line_text)
+
+                is_emergency_header = bool(re.search(r"In\s+Cas[ce]\s+of\s+Emergency", anchor["kw"], re.I))
+                is_sublabel_instruction = bool(re.search(r"^\s*\(.*?(?:forename|address|vorname|geb|geboren|name|anschrift).*?\)\s*$", same_line_text, re.I)) or bool(re.search(r"^\s*\(.*?\)\s*$", same_line_text))
+
+                if same_line_words and is_sublabel_instruction and a_cat in ("PATIENT_NAME", "ADDRESS"):
+                    sublabel_rect = same_line_words[0][0]
+                    for sw in same_line_words[1:]:
+                        sublabel_rect = sublabel_rect | sw[0]
+                    add_target_fn(sublabel_rect, f"{a_cat}_LABEL{suffix}", same_line_text, engine=f"form_sublabel{suffix.lower()}")
+                    has_same_line_val = False
+                elif same_line_words and len(clean_val) > 2 and not is_emergency_header and not re.match(r"^(?:oe|—|_|-|~)+$", clean_val, re.I):
+                    val_rect = same_line_words[0][0]
+                    for sw in same_line_words[1:]:
+                        val_rect = val_rect | sw[0]
+                    val_rect = pymupdf.Rect(
+                        max(0, val_rect.x0 - 2),
+                        max(split_top, val_rect.y0 - 2),
+                        val_rect.x1 + 2,
+                        min(split_bottom, val_rect.y1 + 2)
+                    )
+                    add_target_fn(val_rect, f"{a_cat}_VALUE{suffix}", same_line_text, engine=f"form_field_expansion{suffix.lower()}")
+                    has_same_line_val = True
+                else:
+                    has_same_line_val = False
+
+                if not has_same_line_val or (is_sublabel_instruction and a_cat in ("PATIENT_NAME", "ADDRESS")):
+                    # 2D Column Table Parsing: Check rows directly below for this anchor column
+                    col_x0 = a_rect.x0 - 25
+                    col_x1 = max(a_rect.x1 + 180, end_x)
+                    is_multi_row = a_cat in ("PATIENT_NAME", "ADDRESS")
+                    prev_y1 = line_rect.y1
+                    name_x0 = a_rect.x0
+
+                    for offset in range(1, 4 if is_multi_row else 3):
+                        if l_idx + offset < len(line_objects):
+                            nxt_l = line_objects[l_idx + offset]
+                            clean_next = re.sub(r"[-_=~a.,\s—|]", "", nxt_l["text"]).strip()
+                            if not clean_next or re.match(r"^(?:oe|—|_|-|~|aaa)+$", nxt_l["text"].strip(), re.I):
+                                continue
+
+                            if is_multi_row:
+                                if nxt_l["rect"].y0 - prev_y1 > 28:
+                                    break
+                                if nxt_l["rect"].y1 >= search_page.rect.height * 0.45:
+                                    break
+                            else:
+                                if nxt_l["rect"].y0 - line_rect.y1 > 110:
+                                    break
+
+                            col_words = [w for w in nxt_l["words"] if col_x0 <= w[0].x0 <= col_x1]
+                            if col_words:
+                                col_txt = " ".join(w[1] for w in col_words)
+                                clean_col = re.sub(r"[-_=~a.,\s—|]", "", col_txt).strip()
+                                if re.search(r"\b(?:Rx|Rp\.?|Disp\.?|Medikament|Tablette|Kapsel|Age|Sex|Gender|DOB|Date|Telefon|Phone)\b", col_txt, re.I):
+                                    break
+                                if clean_col and not self.is_whitelisted(col_txt) and not re.match(r"^(?:oe|—|_|-|~|aaa)+$", clean_col, re.I):
+                                    if is_multi_row and abs(col_words[0][0].x0 - name_x0) > 35:
+                                        break
+
+                                    valid = False
+                                    if a_cat == "CONTACT":
+                                        valid = bool(re.search(r"[\d@]", col_txt))
+                                    elif a_cat == "DATE":
+                                        valid = bool(re.search(r"\d|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)", col_txt, re.I))
+                                    elif a_cat == "IDENTIFIER":
+                                        valid = bool(re.search(r"\d", col_txt))
+                                    elif a_cat == "DEMOGRAPHIC":
+                                        valid = bool(re.search(r"\d|Male|Female|M|F|Normal", col_txt, re.I))
+                                    elif a_cat == "INSURANCE":
+                                        valid = bool(re.search(r"[A-Za-z]", col_txt))
+                                    elif a_cat == "PATIENT_NAME":
+                                        valid = bool(re.search(r"(?:[A-Z]{2,}|[A-Z][a-zA-Z]{2,})", col_txt)) and not self.is_whitelisted(col_txt)
+                                    elif a_cat == "ADDRESS":
+                                        valid = bool(re.search(r"[A-Za-z0-9]", col_txt)) and not self.is_whitelisted(col_txt)
+
+                                    if valid:
+                                        c_rect = col_words[0][0]
+                                        for cw in col_words[1:]:
+                                            c_rect = c_rect | cw[0]
+                                        c_rect = pymupdf.Rect(
+                                            max(0, c_rect.x0 - 2),
+                                            max(0, c_rect.y0 - 2),
+                                            c_rect.x1 + 2,
+                                            c_rect.y1 + 2
+                                        )
+                                        target_cat = "ADDRESS_BLOCK" if (is_multi_row and offset > 1) else f"{a_cat}_VALUE_2D{suffix}"
+                                        add_target_fn(c_rect, target_cat, col_txt, engine=f"table_column_2d{suffix.lower()}")
+                                        prev_y1 = nxt_l["rect"].y1
+                                        if not is_multi_row:
+                                            break
+
+                    # OCR-independent handwritten ink-fill detection
+                    # 1. Right-side fill zone
+                    next_anchor_x0 = detected_anchors[a_idx + 1]["rect"].x0 - 4 if a_idx + 1 < len(detected_anchors) else line_rect.x1 + 220
+                    right_end_x = min(next_anchor_x0, anchor["rect"].x1 + 220)
+                    if right_end_x > anchor["rect"].x1 + 10:
+                        right_zone = pymupdf.Rect(
+                            anchor["rect"].x1 + 4,
+                            max(0, anchor["rect"].y0 - 6),
+                            right_end_x,
+                            min(search_page.rect.height, anchor["rect"].y1 + 6)
+                        )
+                        ink_rect = self._detect_handwritten_fill_in_zone(
+                            page_bgr, right_zone, scale_px_x, scale_px_y, self._last_whitelisted_rects
+                        )
+                        if ink_rect:
+                            add_target_fn(ink_rect, f"{a_cat}_HANDWRITTEN_FILL{suffix}", "[HANDWRITTEN_INK]", engine="spatial_ink_fill")
+
+                    # 2. Under-label box zone
+                    clinical_boundary = search_page.rect.height * 0.45
+                    if anchor["rect"].y1 < clinical_boundary:
+                        under_zone = pymupdf.Rect(
+                            anchor["rect"].x0,
+                            anchor["rect"].y1 + 2,
+                            min(search_page.rect.width * 0.85, anchor["rect"].x1 + 180),
+                            min(clinical_boundary, anchor["rect"].y1 + 65)
+                        )
+                        if under_zone.height > 10:
+                            under_fill = self._detect_handwritten_fill_in_zone(
+                                page_bgr, under_zone, scale_px_x, scale_px_y, self._last_whitelisted_rects
+                            )
+                            if under_fill:
+                                add_target_fn(under_fill, f"{a_cat}_HANDWRITTEN_FILL{suffix}", "[HANDWRITTEN_INK]", engine="spatial_ink_fill")
+
     def find_pii_targets_for_page(self, page: pymupdf.Page, page_num: int) -> List[RedactionTarget]:
         """
         Scans a single raster page using dynamic multi-column layout parsing,
         regex entity recognition, and strict clinical whitelist protection.
         """
         max_pt = max(page.rect.width, page.rect.height)
-        effective_dpi = 72 if max_pt > 2000 else self.dpi
-        ocr_lang = get_ocr_languages(self.tessdata_dir)
-        tp = page.get_textpage_ocr(language=ocr_lang, dpi=effective_dpi, tessdata=self.tessdata_dir)
+        if max_pt < 550:
+            effective_dpi = 300
+        elif max_pt < 900:
+            effective_dpi = self.dpi if (page.rect.width >= 550 and page.rect.height >= 700) else 200
+        elif max_pt <= 2000:
+            effective_dpi = self.dpi
+        else:
+            effective_dpi = 72
+        tp = page.get_textpage_ocr(language="eng", dpi=effective_dpi, tessdata=self.tessdata_dir)
         words = page.get_text("words", textpage=tp)
         full_text = page.get_text(textpage=tp)
+
+        eu_marker_regex = re.compile(
+            r"[äöüßéèêëàâîïôûùçñáíóúÁÉÍÓÚÑÄÖÜ]|\b(?:Rezept|Krankenkasse|Geb|Ausstellungsdatum|Vorname|Unterschrift|Arzt|Receta|Ordonnance|Nom|Prénom|Calle|Straße)\b",
+            re.IGNORECASE
+        )
+        is_eu = bool(eu_marker_regex.search(full_text))
+        all_langs = "eng"
+        if len(words) < 20 or is_eu:
+            all_langs = get_ocr_languages(self.tessdata_dir)
+            if all_langs != "eng":
+                tp = page.get_textpage_ocr(language=all_langs, dpi=effective_dpi, tessdata=self.tessdata_dir)
+                words = page.get_text("words", textpage=tp)
+                full_text = page.get_text(textpage=tp)
+
         self._last_extracted_text = full_text
         self._last_extracted_words = words
 
@@ -459,7 +859,25 @@ class LocalImageRedactor:
         active_lines: List[Dict[str, Any]] = []
 
         def can_redact(rect: pymupdf.Rect, raw_text: str) -> bool:
-            if raw_text == "BARCODE_OR_QR" or raw_text.startswith("http") or raw_text in ("QR_CODE", "BARCODE"):
+            if raw_text.startswith("http") or raw_text == "QR_CODE":
+                return True
+            if raw_text in ("BARCODE", "BARCODE_OR_QR"):
+                # NEVER allow an un-decoded BARCODE candidate to bypass whitelisted_rects.
+                # If a BARCODE box overlaps with any whitelisted_rects or overlaps with >= 2 OCR words
+                # containing letters ([A-Za-z]{3,}), reject it!
+                for wr in whitelisted_rects:
+                    if not (rect & wr).is_empty and (rect & wr).get_area() > 0:
+                        return False
+                letter_word_count = 0
+                for w in words:
+                    w_rect = pymupdf.Rect(w[0], w[1], w[2], w[3])
+                    inter = rect & w_rect
+                    if not inter.is_empty and inter.get_area() > 0.25 * w_rect.get_area():
+                        char_w = w_rect.width / max(1, len(w[4]))
+                        if re.search(r"[A-Za-z]{3,}", w[4]) and char_w < 35:
+                            letter_word_count += 1
+                            if letter_word_count >= 2:
+                                return False
                 return True
             if self.is_whitelisted(raw_text):
                 return False
@@ -537,199 +955,121 @@ class LocalImageRedactor:
         line_objects = self._reconstruct_visual_lines(words)
         active_lines = line_objects
 
+        # Detect Clinical Zone (Rx/Rp.) and Right-hand Doctor Stamp Box boundaries
+        clinical_hdr_re = re.compile(
+            r"^\s*(?:Rx\b|Rp\.?\b|R:\b|Disp\.?\b|Sig:?\b|Medikament\b|Verordnungen\b|Medications?\b|Prescription\b|Diagnosis\b)",
+            re.IGNORECASE
+        )
+        numbered_med_re = re.compile(
+            r"^\s*1\.\s+(?:Tab\.?|Cap\.?|Capsule|Tablet|Inhaler|[A-Z][a-z]{3,})\b",
+            re.IGNORECASE
+        )
+        clinical_y0 = None
+        for l in line_objects:
+            if clinical_hdr_re.search(l["text"]) or numbered_med_re.search(l["text"]):
+                clinical_y0 = l["rect"].y0
+                break
+        if clinical_y0 is None:
+            for w in words:
+                if re.match(r"^(?:Rx|Rp\.?|R:|Disp\.?|Sig:?|Medikament)$", w[4], re.IGNORECASE):
+                    clinical_y0 = w[1]
+                    break
+
+        stamp_box_re = re.compile(
+            r"\b(?:Vertragsarztstempel|Arztstempel|Praxisstempel|Stamp\s*&\s*Signature|Doctor(?:'s|’s)?\s*Stamp)\b",
+            re.IGNORECASE
+        )
+        right_stamp_column_x0 = page.rect.width
+        for l in line_objects:
+            if stamp_box_re.search(l["text"]) and l["rect"].x0 > page.rect.width * 0.45:
+                right_stamp_column_x0 = l["rect"].x0 - 15.0
+                break
+
+        footer_marker_re = re.compile(
+            r"\b(?:Signature|Prescriber|Unterschrift|For\s+Dispenser|Authority\s+approval|Community\s+Pharmacy|"
+            r"Doctor(?:'s|’s)?\s*Signature|Signature\s+of\s+Prescriber|Doctor\s+Name\b|GMC\s*No|AHPRA\s*No)\b",
+            re.IGNORECASE
+        )
+        footer_candidates = [
+            l["rect"].y0 for l in line_objects
+            if l["rect"].y0 > (clinical_y0 or 0) + 15 and footer_marker_re.search(l["text"])
+        ]
+        footer_y0 = min(footer_candidates) if footer_candidates else page.rect.height * 0.75
+
+        def is_in_clinical_zone(r: pymupdf.Rect) -> bool:
+            if clinical_y0 is None:
+                return False
+            return (clinical_y0 - 5.0 <= r.y0 and r.y1 <= footer_y0 + 5.0 and r.x0 < right_stamp_column_x0)
+
         # -------------------------------------------------------------------
-        # 1. Dynamic 2D Multi-Column Key-Value Form Field Parser
+        # 1. Unified 2D Multi-Column Key-Value Form Field & Ink-Fill Parser
         # -------------------------------------------------------------------
-        anchor_patterns = list(KEY_VALUE_ANCHORS.items())
+        self._parse_form_anchors_on_lines(
+            line_objects=line_objects,
+            search_page=page,
+            textpage=tp,
+            page_bgr=page_bgr,
+            scale_px_x=scale_px_x,
+            scale_px_y=scale_px_y,
+            add_target_fn=add_target,
+            suffix=""
+        )
 
-        for l_idx, l_obj in enumerate(line_objects):
-            l_text = l_obj["text"]
-            l_words = l_obj["words"]
-            line_rect = l_obj["rect"]
+        # Inline pharmacy/clinic dispense rule
+        inline_dispense_re = re.compile(
+            r"\b(?:dispensing\s+only\s+at|dispensed\s+by)\s+[A-Z][A-Za-z0-9\s',.]+(?:Pharmacy|Clinic|Hospital|Chemist)[A-Za-z0-9\s',.]*",
+            re.IGNORECASE
+        )
+        for match in inline_dispense_re.finditer(full_text):
+            m_str = match.group(0).strip()
+            if not self.is_whitelisted(m_str) and len(m_str) > 5:
+                for r in page.search_for(m_str, textpage=tp):
+                    add_target(r, "DISPENSING_PHARMACY", m_str, engine="inline_dispense_rule")
 
-            detected_anchors = []
-            line_mid = (line_rect.y0 + line_rect.y1) / 2.0
-            for cat, patterns in anchor_patterns:
-                for pat in patterns:
-                    for m in re.finditer(pat, l_text, re.IGNORECASE):
-                        kw = m.group(0)
-                        raw_rects = page.search_for(kw, textpage=tp)
-                        # Explicitly filter by line vertical territory because search_for(textpage) ignores clip
-                        kw_rects = sorted([r for r in raw_rects if abs((r.y0 + r.y1)/2.0 - line_mid) < max(20.0, line_rect.height * 0.4)], key=lambda r: r.x0)
-                        if kw_rects:
-                            # Cluster into contiguous phrases if needle has multiple words or multiple occurrences
-                            kw_clusters = []
-                            curr_cluster = [kw_rects[0]]
-                            for r in kw_rects[1:]:
-                                if abs(r.x0 - curr_cluster[-1].x1) < 40:
-                                    curr_cluster.append(r)
-                                else:
-                                    kw_clusters.append(curr_cluster)
-                                    curr_cluster = [r]
-                            kw_clusters.append(curr_cluster)
-
-                            for cluster in kw_clusters:
-                                u_kw = cluster[0]
-                                for kr in cluster[1:]:
-                                    u_kw = u_kw | kr
-                                detected_anchors.append({
-                                    "cat": cat,
-                                    "kw": kw,
-                                    "rect": u_kw
-                                })
-
-            # Deduplicate sub-anchors (e.g. keep "Patient Name" over "Name")
-            dedup_anchors = []
-            for a in detected_anchors:
-                is_sub = False
-                for other in detected_anchors:
-                    if a is not other:
-                        if (a["rect"] in other["rect"] and len(other["kw"]) > len(a["kw"])) or \
-                           (other["kw"].endswith(a["kw"]) and len(other["kw"]) > len(a["kw"])):
-                            is_sub = True
-                            break
-                if not is_sub:
-                    dedup_anchors.append(a)
-            detected_anchors = dedup_anchors
-            detected_anchors.sort(key=lambda a: a["rect"].x0)
-
-            # Clamping line rect with adjacent lines to prevent vertical line bleed
-            l_mid = sum((w[0].y0 + w[0].y1) / 2 for w in l_words) / len(l_words) if l_words else line_rect.y0
-            split_top = line_rect.y0
-            if l_idx > 0:
-                prev_words = line_objects[l_idx - 1]["words"]
-                prev_mid = sum((w[0].y0 + w[0].y1) / 2 for w in prev_words) / len(prev_words) if prev_words else line_objects[l_idx - 1]["rect"].y0
-                if l_mid > prev_mid:
-                    split_top = max(line_rect.y0, (prev_mid + l_mid) / 2.0)
-
-            split_bottom = line_rect.y1
-            if l_idx + 1 < len(line_objects):
-                nxt_words = line_objects[l_idx + 1]["words"]
-                nxt_mid = sum((w[0].y0 + w[0].y1) / 2 for w in nxt_words) / len(nxt_words) if nxt_words else line_objects[l_idx + 1]["rect"].y0
-                if nxt_mid > l_mid:
-                    split_bottom = min(line_rect.y1, (l_mid + nxt_mid) / 2.0)
-
-            for a_idx, anchor in enumerate(detected_anchors):
-                a_rect = anchor["rect"]
-                a_cat = anchor["cat"]
-                clamped_a_rect = pymupdf.Rect(
-                    max(0, a_rect.x0 - 2),
-                    max(split_top, a_rect.y0 - 2),
-                    a_rect.x1 + 2,
-                    min(split_bottom, a_rect.y1 + 2)
-                )
-                add_target(clamped_a_rect, f"{a_cat}_LABEL", anchor["kw"], engine="form_anchor")
-
-                start_x = a_rect.x1 + 2
-                if a_idx + 1 < len(detected_anchors):
-                    end_x = max(start_x, detected_anchors[a_idx + 1]["rect"].x0 - 4)
-                else:
-                    end_x = line_rect.x1 + 4
-
-                # Check for OCR token fusion where anchor and value are joined without whitespace (e.g. 'TypedBy:-/Operator')
-                fused_token = None
-                for w in l_words:
-                    if w[0].x0 <= a_rect.x0 + 8 and w[0].x1 > a_rect.x1 + 6:
-                        fused_rect = pymupdf.Rect(start_x, w[0].y0, min(end_x, w[0].x1), w[0].y1)
-                        fused_val = re.sub(r"^.*?[:\-=~+/|]+", "", w[1]).strip()
-                        clean_fused = re.sub(r"[:\-=~+._\s|]", "", fused_val)
-                        if len(clean_fused) > 1 and not self.is_whitelisted(fused_val):
-                            fused_token = (fused_rect, fused_val)
-                        break
-
-                normal_words = [w for w in l_words if start_x - 4 <= w[0].x0 <= end_x]
-                if fused_token:
-                    candidate_words = [fused_token] + normal_words
-                else:
-                    candidate_words = normal_words
-
-                # Filter by spatial proximity: form field values are adjacent to the label.
-                # Stop if there is a significant gap (> 120 pt) between words or after label.
-                same_line_words = []
-                prev_x = a_rect.x1
-                for sw_rect, sw_txt in candidate_words:
-                    gap = sw_rect.x0 - prev_x
-                    if same_line_words and gap > 120:
-                        break
-                    if not same_line_words and gap > 180:
-                        break
-                    same_line_words.append((sw_rect, sw_txt))
-                    prev_x = sw_rect.x1
-
-                same_line_text = " ".join(w[1] for w in same_line_words)
-                clean_val = re.sub(r"[:\-=~+._\s|]", "", same_line_text)
-
-                is_emergency_header = bool(re.search(r"In\s+Cas[ce]\s+of\s+Emergency", anchor["kw"], re.I))
-
-                if same_line_words and len(clean_val) > 2 and not is_emergency_header and not re.match(r"^(?:oe|—|_|-|~)+$", clean_val, re.I):
-                    # Tightly enclose actual words without line ballooning
-                    val_rect = same_line_words[0][0]
-                    for sw in same_line_words[1:]:
-                        val_rect = val_rect | sw[0]
-                    val_rect = pymupdf.Rect(
-                        max(0, val_rect.x0 - 2),
-                        max(split_top, val_rect.y0 - 2),
-                        val_rect.x1 + 2,
-                        min(split_bottom, val_rect.y1 + 2)
-                    )
-                    add_target(val_rect, f"{a_cat}_VALUE", same_line_text, engine="form_field_expansion")
-                else:
-                    # 2D Column Table Parsing: Check rows directly below for this anchor column
-                    col_x0 = a_rect.x0 - 25
-                    col_x1 = max(a_rect.x1 + 60, end_x)
-                    for offset in range(1, 3):
-                        if l_idx + offset < len(line_objects):
-                            nxt_l = line_objects[l_idx + offset]
-                            clean_next = re.sub(r"[-_=~a.,\s—|]", "", nxt_l["text"]).strip()
-                            if not clean_next or re.match(r"^(?:oe|—|_|-|~|aaa)+$", nxt_l["text"].strip(), re.I):
-                                continue
-                            if nxt_l["rect"].y0 - line_rect.y1 > 50:
-                                break
-                            col_words = [w for w in nxt_l["words"] if col_x0 <= w[0].x0 <= col_x1]
-                            if col_words:
-                                col_txt = " ".join(w[1] for w in col_words)
-                                clean_col = re.sub(r"[-_=~a.,\s—|]", "", col_txt).strip()
-                                if clean_col and not self.is_whitelisted(col_txt) and not re.match(r"^(?:oe|—|_|-|~|aaa)+$", clean_col, re.I):
-                                    valid = True
-                                    if a_cat == "CONTACT":
-                                        valid = bool(re.search(r"[\d@]", col_txt))
-                                    elif a_cat == "DATE":
-                                        valid = bool(re.search(r"\d|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)", col_txt, re.I))
-                                    elif a_cat == "IDENTIFIER":
-                                        valid = bool(re.search(r"\d", col_txt))
-                                    elif a_cat == "DEMOGRAPHIC":
-                                        valid = bool(re.search(r"\d|Male|Female|M|F|Normal", col_txt, re.I))
-                                    elif a_cat == "INSURANCE":
-                                        valid = bool(re.search(r"[A-Za-z]", col_txt))
-                                    elif a_cat == "PATIENT_NAME":
-                                        valid = bool(re.search(r"[A-Z][a-zA-Z]{2,}", col_txt)) and not self.is_whitelisted(col_txt)
-
-                                    if valid:
-                                        c_rect = col_words[0][0]
-                                        for cw in col_words[1:]:
-                                            c_rect = c_rect | cw[0]
-                                        c_rect = pymupdf.Rect(
-                                            max(0, c_rect.x0 - 2),
-                                            max(0, c_rect.y0 - 2),
-                                            c_rect.x1 + 2,
-                                            c_rect.y1 + 2
-                                        )
-                                        add_target(c_rect, f"{a_cat}_VALUE_2D", col_txt, engine="table_column_2d")
-                                        break
+        # Anywhere-on-page Pharmacy/Clinic/Healthcare blocks
+        pharmacy_block_re = re.compile(
+            r"\b(?:[A-ZÄÖÜ][A-Za-z0-9\s',.&-]{2,40}\s+(?:Community\s+Pharmacy|Pharmacy|Chemist|Medical\s+Centre|Medical|Clinic|Hospital|Optical|Optometry|Vision|Eye\s+Care|Dental|Praxis|Klinik|Apotheke))\b",
+            re.IGNORECASE
+        )
+        for match in pharmacy_block_re.finditer(full_text):
+            m_str = match.group(0).strip()
+            if not self.is_whitelisted(m_str) and len(m_str) > 5:
+                for r in page.search_for(m_str, textpage=tp):
+                    if not is_in_clinical_zone(r) or r.y0 >= footer_y0 - 20:
+                        add_target(r, "CLINIC_FACILITY", m_str, engine="pharmacy_block_rule")
 
         # -------------------------------------------------------------------
         # 2. Universal Standalone Regex Entity Scanners
         # -------------------------------------------------------------------
         standalone_regexes = [
-            ("PHONE", re.compile(r"\b(?:\+?91[\-\s]?)?[6-9]\d{9}\b|\b0\d{2,4}[\-\s]?\d{6,8}\b|\b\(\d{3}\)[\s\-]?[0-9O]{3}[\-\s]?\d{4}\b|\b\d{3}\)[\s\-]?[0-9O]{3}[\-\s]?\d{4}\b", re.IGNORECASE)),
-            ("DATE", re.compile(r"\b\d{1,2}[/\-.][0-9]{1,2}[/\-.][0-9]{2,4}\b|\b\d{1,2}[\s\-_](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|Januar|Februar|März|Mai|Juni|Juli|Oktober|Dezember|Enero|Febrero|Marzo|Abril|Mayo|Junio|Julio|Agosto|Septiembre|Octubre|Noviembre|Diciembre|Janvier|Février|Mars|Avril|Mai|Juin|Juillet|Août|Septembre|Octobre|Novembre|Décembre)[a-z]*[\s\-_]\d{2,4}\b|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|Januar|Februar|März|Mai|Juni|Juli|Oktober|Dezember|Enero|Febrero|Marzo|Abril|Mayo|Junio|Julio|Agosto|Septiembre|Octubre|Noviembre|Diciembre|Janvier|Février|Mars|Avril|Mai|Juin|Juillet|Août|Septembre|Octobre|Novembre|Décembre)[a-z]*\s+\d{1,2},?\s+\d{4}\b", re.IGNORECASE)),
+            ("PHONE", re.compile(
+                r"\b(?:\+?91[\-\s]?)?[6-9]\d{9}\b|\b0\d{2,4}[\-\s]?\d{6,8}\b|"
+                r"\b(?:Ph|Tel|Phone)?\.?\s*0[23478]\s*\d{4}\s*\d{4}\b|\b\(\d{2}\)\s*\d{4}\s*\d{4}\b|"
+                r"\b\(\d{3}\)[\s\-]?[0-9O]{3}[\-\s]?\d{4}\b|\b\d{3}\)[\s\-]?[0-9O]{3}[\-\s]?\d{4}\b|\b\d{3}[\-\s.]\d{3}[\-\s.]\d{4}\b|"
+                r"(?:Tel(?:efon)?|Phone|Mobile|Kontakt|Ph)\.?\s*[:\-=~+]?\s*[\d\-\s/()]{5,18}",
+                re.IGNORECASE
+            )),
+            ("DATE", re.compile(r"\b\d{1,2}[/\-.][0-9]{1,2}[/\-.][0-9]{2,4}\b|\b\d{1,2}\.\s*\d{1,2}\.\s*\d{2,4}\b|\b\d{1,2}[\s\-_](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|Januar|Februar|März|Mai|Juni|Juli|Oktober|Dezember|Enero|Febrero|Marzo|Abril|Mayo|Junio|Julio|Agosto|Septiembre|Octubre|Noviembre|Diciembre|Janvier|Février|Mars|Avril|Mai|Juin|Juillet|Août|Septembre|Octobre|Novembre|Décembre)[a-z]*[\s\-_]\d{2,4}\b|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|Januar|Februar|März|Mai|Juni|Juli|Oktober|Dezember|Enero|Febrero|Marzo|Abril|Mayo|Junio|Julio|Agosto|Septiembre|Octubre|Noviembre|Diciembre|Janvier|Février|Mars|Avril|Mai|Juin|Juillet|Août|Septembre|Octobre|Novembre|Décembre)[a-z]*\s+\d{1,2},?\s+\d{4}\b", re.IGNORECASE)),
             ("EMAIL", re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", re.IGNORECASE)),
             ("URL", re.compile(r"\bhttps?://[^\s/$.?#].[^\s]*\b", re.IGNORECASE)),
             ("PATIENT_HONORIFIC", re.compile(r"(?i:\b(?:Mr|Mrs|Ms|Miss|Master|Baby|Shri|Smt|Herr|Frau|Fr\.|M\.|Mme|Mlle|Monsieur|Madame|Mademoiselle|Sr\.|Sra\.|Srta\.|Señor|Señora|Señorita|Sig\.|Sig\.ra|Signor|Signora|Dott\.|Dott\.ssa)\.?)[^\S\r\n]+[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ\-'.]+(?:[^\S\r\n]+(?:[A-ZÄÖÜÁÉÍÓÚÑ]\.?|[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ\-'.]+))*")),
-            ("DOCTOR_NAME", re.compile(r"(?i:\b(?:Dr\.|Dr|Prof\.|Prof|Herr\s+Dr\.|Frau\s+Dr\.|Prof\.\s*Dr\.|Dr\.\s*med\.|Dott\.|Dott\.ssa|Or\.))[^\S\r\n]+(?:[A-ZÄÖÜÁÉÍÓÚÑ]\.?[^\S\r\n]+)?[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ\-'.]+(?:[^\S\r\n]+(?:[A-ZÄÖÜÁÉÍÓÚÑ]\.?|[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ\-'.]+))*(?:\s*\([A-Za-z\s,.]+\))?|\b(?:Dr|Prof)[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ]+\b|\b[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ\-'.]+(?:[^\S\r\n]+(?:[A-ZÄÖÜÁÉÍÓÚÑ]\.?|[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ\-'.]+))*[,\s]+(?:M\.?B\.?B\.?S|M\.?D|M\.?S|D\.?M\.?R\.?D|D\.?N\.?B|F\.?R\.?C\.?R|F\.?R\.?C\.?S)\b")),
-            ("DOCTOR_CREDENTIALS", re.compile(r"\b(?:MBBS|M\.B\.B\.S|MD|M\.D|MS|M\.S|DMRD|D\.M\.R\.D|DNB|D\.N\.B|FRCR|FRCS)\b")),
+            ("DOCTOR_NAME", re.compile(
+                r"(?i:\b(?:Dr\.|Dr|Prof\.|Prof|Herr\s+Dr\.|Frau\s+Dr\.|Prof\.\s*Dr\.|Dr\.\s*med\.|Dott\.|Dott\.ssa|Or\.))[^\S\r\n]+(?:[A-ZÄÖÜÁÉÍÓÚÑ]\.?[^\S\r\n]+)?[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ\-'.]+(?:[^\S\r\n]+(?:[A-ZÄÖÜÁÉÍÓÚÑ]\.?|[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ\-'.]+))*(?:\s*\([A-Za-z\s,.]+\))?|"
+                r"\b(?:Dr|Prof)[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ]+\b|"
+                r"\b[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ\-'.]+(?:[^\S\r\n]+(?:[A-ZÄÖÜÁÉÍÓÚÑ]\.?|[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ\-'.]+))*[,\s]+(?:M\.?B\.?B\.?S|M\.?D|M\.?S|D\.?M\.?R\.?D|D\.?N\.?B|F\.?R\.?C\.?R|F\.?R\.?C\.?S|FRACGP|MRCGP|MBChB|FRACP|O\.?D\.?|D\.?O\.?|PharmD)\b"
+            )),
+            ("DOCTOR_CREDENTIALS", re.compile(r"\b(?:MBBS|M\.B\.B\.S|MD|M\.D|MS|M\.S|DMRD|D\.M\.R\.D|DNB|D\.N\.B|FRCR|FRCS|FRACGP|MRCGP|MBChB|FRACP|O\.?D\.?|D\.?O\.?|PharmD)\b")),
             ("ID_TOKEN", re.compile(r"\b[A-Z]{2,4}[-/]\d{4,12}(?:[-/]\d+)?\b|\b\d{8,12}\b")),
-            ("ADDRESS_STREET", re.compile(r"\b\d+\s+[A-Za-z0-9\-]+(?:\s+[A-Za-z0-9\-]+)*\s+(?:Street|St|Avenue|Ave|Drive|Dr|Road|Rd|Boulevard|Blvd|Court|Ct|Lane|Ln|Terrace|Colony|Market|Chowk|Way|Square|Sq|Place|Pl|Straße|Str|Weg|Platz|Allee|Gasse|Rue|Bd|Calle|Paseo|Via|Piazza)\b|\b[A-ZÄÖÜÁÉÍÓÚÑ][a-zäöüßáéíóúñ]+(?:straße|str\.|strasse|weg|platz|allee|gasse)\s+\d+[a-zA-Z]?\b|\b(?:Rue|Boulevard|Bd|Calle|Paseo|Via|Piazza)\s+(?:de\s+|del\s+|della\s+|di\s+)?[A-ZÄÖÜÁÉÍÓÚÑ][a-zäöüßáéíóúñ]+(?:[ \t]+[A-ZÄÖÜÁÉÍÓÚÑ][a-zäöüßáéíóúñ]+){0,3}(?:\s+\d+[a-zA-Z]?)?\b|\bSEC(?:TOR)?\s*\d+[\s,]+[A-Za-z]+\b", re.IGNORECASE)),
+            ("ADDRESS_STREET", re.compile(
+                r"\b\d+\s+[A-Za-z0-9\-.,]+(?:\s+[A-Za-z0-9\-.,]+)*\s+(?:Street|St|Avenue|Ave|Drive|Dr|Road|Rd|Boulevard|Blvd|Court|Ct|Lane|Ln|Terrace|Colony|Market|Chowk|Way|Square|Sq|Place|Pl|Straße|Str|Weg|Platz|Allee|Gasse|Rue|Bd|Calle|Paseo|Via|Piazza)\b|"
+                r"\b(?:Lvl|Level)\s+\d+[,\s]+[A-Za-z0-9\-.,\s]+(?:Street|St|Road|Rd|Ave)\b|"
+                r"\b[A-Z][a-zA-Z\s]+,\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?\b|"
+                r"\b[A-ZÄÖÜÁÉÍÓÚÑ][a-zäöüßáéíóúñ]+(?:straße|str\.|strasse|weg|platz|allee|gasse)\s+\d+[a-zA-Z]?\b|"
+                r"\b(?:Rue|Boulevard|Bd|Calle|Paseo|Via|Piazza)\s+(?:de\s+|del\s+|della\s+|di\s+)?[A-ZÄÖÜÁÉÍÓÚÑ][a-zäöüßáéíóúñ]+(?:[ \t]+[A-ZÄÖÜÁÉÍÓÚÑ][a-zäöüßáéíóúñ]+){0,3}(?:\s+\d+[a-zA-Z]?)?\b|"
+                r"\b(?:NSW|VIC|QLD|WA|SA|TAS|ACT|NT)\s+\d{4}\b|"
+                r"\bSEC(?:TOR)?\s*\d+[\s,]+[A-Za-z]+\b",
+                re.IGNORECASE
+            )),
             ("CITY_STATE", re.compile(r"\b(?:City|State|Country|District|Town|Location)\s*[:\-=~+]?\s*[A-Za-z\s]+\b", re.IGNORECASE)),
         ]
 
@@ -739,6 +1079,8 @@ class LocalImageRedactor:
                 if not self.is_whitelisted(match_str) and len(match_str) > 2:
                     rects = page.search_for(match_str, textpage=tp)
                     for r in rects:
+                        if cat in ("ID_TOKEN", "CITY_STATE") and is_in_clinical_zone(r):
+                            continue
                         add_target(r, cat, match_str, engine="regex_scanner")
                         # If a doctor name is in the footer authorization area, check for a handwritten signature above it
                         if cat == "DOCTOR_NAME" and r.y0 > page.rect.height * 0.75:
@@ -779,21 +1121,33 @@ class LocalImageRedactor:
                     for r in rects:
                         add_target(r, cat, match_str, engine="statutory_scanner")
 
-        # Generic Header-Zone Facility & Provider Rule (Top 35% of Document)
+        # Generic Header-Zone Facility & Provider Rule (Top 35% of Document and lower-half dispensing facility)
         header_zone_y = page.rect.height * 0.35
         facility_keywords = re.compile(
-            r"\b(?:Hospital|Clinic|Imaging|Diagnostics?|Institute|Centre|Center|Medical|Superspecialit(?:y|ies)|Laborator(?:y|ies)|Pharmacy|Healthcare)\b",
+            r"\b(?:Hospital|Clinic|Imaging|Diagnostics?|Institute|Centre|Center|Medical\s+Centre|Medical|Superspecialit(?:y|ies)|Laborator(?:y|ies)|Pharmacy|Chemist|Optical|Optometry|Vision|Eye\s+Care|Dental|Healthcare|Praxis|Klinik|Apotheke)\b",
             re.IGNORECASE
         )
-        for line in line_objects:
+        provider_creds = re.compile(
+            r"\b(?:M\.?B\.?B\.?S|M\.?D|M\.?S|D\.?M\.?R\.?D|D\.?N\.?B|F\.?R\.?C\.?R|F\.?R\.?C\.?S|Regn?\.?|MCI|NMC|FRACGP|MRCGP|MBChB|FRACP|O\.?D\.?|D\.?O\.?|PharmD)\b",
+            re.IGNORECASE
+        )
+        for idx, line in enumerate(line_objects):
+            line_str = line["text"].strip()
+            if self.is_whitelisted(line_str) or len(line_str) < 3:
+                continue
             if line["rect"].y1 <= header_zone_y:
-                line_str = line["text"].strip()
-                if self.is_whitelisted(line_str) or len(line_str) < 3:
-                    continue
                 if facility_keywords.search(line_str):
                     add_target(line["rect"], "CLINIC_FACILITY", line_str, engine="header_facility_rule")
-                elif re.search(r"\b(?:M\.?B\.?B\.?S|M\.?D|M\.?S|D\.?M\.?R\.?D|D\.?N\.?B|F\.?R\.?C\.?R|Regn?\.?|MCI|NMC)\b", line_str, re.IGNORECASE):
+                elif provider_creds.search(line_str):
                     add_target(line["rect"], "HEADER_PROVIDER", line_str, engine="header_provider_rule")
+            elif line["rect"].y0 >= page.rect.height * 0.50 and not is_in_clinical_zone(line["rect"]):
+                if facility_keywords.search(line_str):
+                    adj_text = " ".join([
+                        line_objects[j]["text"] for j in range(max(0, idx - 2), min(len(line_objects), idx + 3))
+                    ])
+                    has_contact = bool(re.search(r"\b(?:\d{3}[\-\s.]?\d{3}[\-\s.]?\d{4}|\d{8,12}|0[23478]\s*\d{4}\s*\d{4}|Street|St|Rd|Road|Ave|Lvl|NSW|VIC|QLD|WA|SA|TAS|ACT|NT)\b", adj_text, re.IGNORECASE))
+                    if has_contact:
+                        add_target(line["rect"], "CLINIC_FACILITY", line_str, engine="footer_facility_rule")
 
         # -------------------------------------------------------------------
         # 2b. Local spaCy NER for unanchored Persons, Locations, and Organizations
@@ -804,12 +1158,16 @@ class LocalImageRedactor:
             if not self.is_whitelisted(matched_str) and len(matched_str) >= 3:
                 rects = page.search_for(matched_str, textpage=tp)
                 for r in rects:
+                    if is_in_clinical_zone(r):
+                        continue
                     add_target(r, cand["category"], matched_str, engine="spacy_ner")
                 if not rects and len(matched_str.split()) > 1:
                     for part in matched_str.split():
                         if len(part) >= 4 and not self.is_whitelisted(part):
                             p_rects = page.search_for(part, textpage=tp)
                             for pr in p_rects:
+                                if is_in_clinical_zone(pr):
+                                    continue
                                 add_target(pr, cand["category"], part, engine="spacy_ner")
 
         # -------------------------------------------------------------------
@@ -817,88 +1175,24 @@ class LocalImageRedactor:
         # -------------------------------------------------------------------
         tmp_doc_enh = None
         try:
-            h_ratio = 1.0 if len(words) < 25 else 0.45
-            words_enh, p_enh, tp_enh, tmp_doc_enh = self._get_enhanced_fullpage_ocr(page, h_ratio=h_ratio)
+            is_std_sheet = (page.rect.width >= 550 and page.rect.height >= 700)
+            h_ratio = 0.45 if is_std_sheet else (1.0 if (max_pt < 800 or len(words) < 45) else 0.45)
+            words_enh, p_enh, tp_enh, tmp_doc_enh = self._get_enhanced_fullpage_ocr(page, h_ratio=h_ratio, lang=all_langs if (is_eu or len(words) < 20) else "eng")
             full_enh = p_enh.get_text(textpage=tp_enh)
 
-            # 3a. Reconstruct visual lines and run form anchor parsing on CLAHE pass
+            # 3a. Reconstruct visual lines and run unified form anchor parsing on CLAHE pass
             line_objects_enh = self._reconstruct_visual_lines(words_enh)
             active_lines = line_objects_enh
-            for l_idx_e, l_obj_e in enumerate(line_objects_enh):
-                l_text_e = l_obj_e["text"]
-                l_words_e = l_obj_e["words"]
-                line_rect_e = l_obj_e["rect"]
-                line_mid_e = (line_rect_e.y0 + line_rect_e.y1) / 2.0
-                detected_anchors_e = []
-                for cat, patterns in anchor_patterns:
-                    for pat in patterns:
-                        for m in re.finditer(pat, l_text_e, re.IGNORECASE):
-                            kw = m.group(0)
-                            raw_rects = p_enh.search_for(kw, textpage=tp_enh)
-                            kw_rects = sorted([r for r in raw_rects if abs((r.y0 + r.y1)/2.0 - line_mid_e) < max(20.0, line_rect_e.height * 0.4)], key=lambda r: r.x0)
-                            if kw_rects:
-                                kw_clusters = []
-                                curr_cluster = [kw_rects[0]]
-                                for r in kw_rects[1:]:
-                                    if abs(r.x0 - curr_cluster[-1].x1) < 40:
-                                        curr_cluster.append(r)
-                                    else:
-                                        kw_clusters.append(curr_cluster)
-                                        curr_cluster = [r]
-                                kw_clusters.append(curr_cluster)
-                                for cluster in kw_clusters:
-                                    u_kw = cluster[0]
-                                    for kr in cluster[1:]:
-                                        u_kw = u_kw | kr
-                                    detected_anchors_e.append({
-                                        "cat": cat,
-                                        "kw": kw,
-                                        "rect": u_kw
-                                    })
-                # Deduplicate anchors
-                dedup_anchors_e = []
-                for a in detected_anchors_e:
-                    is_sub = False
-                    for other in detected_anchors_e:
-                        if a is not other:
-                            if (a["rect"] in other["rect"] and len(other["kw"]) > len(a["kw"])) or \
-                               (other["kw"].endswith(a["kw"]) and len(other["kw"]) > len(a["kw"])):
-                                is_sub = True
-                                break
-                    if not is_sub:
-                        dedup_anchors_e.append(a)
-                    detected_anchors_e = dedup_anchors_e
-                detected_anchors_e.sort(key=lambda a: a["rect"].x0)
-
-                for a_idx, anchor in enumerate(detected_anchors_e):
-                    a_rect = anchor["rect"]
-                    a_cat = anchor["cat"]
-                    add_target(a_rect, f"{a_cat}_LABEL_CLAHE", anchor["kw"], engine="form_anchor_clahe")
-                    start_x = a_rect.x1 + 2
-                    if a_idx + 1 < len(detected_anchors_e):
-                        end_x = max(start_x, detected_anchors_e[a_idx + 1]["rect"].x0 - 4)
-                    else:
-                        end_x = line_rect_e.x1 + 4
-                    same_line_words = [w for w in l_words_e if start_x - 4 <= w[0].x0 <= end_x]
-                    same_line_text = " ".join(w[1] for w in same_line_words)
-                    clean_val = re.sub(r"[:\-=~+._\s]", "", same_line_text)
-
-                    if not same_line_words:
-                        for w in l_words_e:
-                            if w[0].x0 <= a_rect.x0 + 8 and w[0].x1 > start_x + 8:
-                                fused_rect = pymupdf.Rect(start_x, w[0].y0, min(end_x, w[0].x1), w[0].y1)
-                                fused_val = re.sub(r"^.*?[:\-=~+/]+", "", w[1]).strip()
-                                clean_fused = re.sub(r"[:\-=~+._\s]", "", fused_val)
-                                if len(clean_fused) > 2 and not self.is_whitelisted(fused_val):
-                                    same_line_words = [(fused_rect, fused_val)]
-                                    same_line_text = fused_val
-                                    clean_val = clean_fused
-                                break
-                    if same_line_words and len(clean_val) > 2 and not re.match(r"^(?:oe|—|_|-|~)+$", clean_val, re.I):
-                        val_rect = same_line_words[0][0]
-                        for sw in same_line_words[1:]:
-                            val_rect = val_rect | sw[0]
-                        add_target(val_rect, f"{a_cat}_VALUE_CLAHE", same_line_text, engine="form_field_expansion_clahe")
+            self._parse_form_anchors_on_lines(
+                line_objects=line_objects_enh,
+                search_page=p_enh,
+                textpage=tp_enh,
+                page_bgr=page_bgr,
+                scale_px_x=scale_px_x,
+                scale_px_y=scale_px_y,
+                add_target_fn=add_target,
+                suffix="_CLAHE"
+            )
 
             # 3b. Standalone regexes on CLAHE pass
             for cat, reg in standalone_regexes:
@@ -907,18 +1201,28 @@ class LocalImageRedactor:
                     if not self.is_whitelisted(match_str) and len(match_str) > 2:
                         rects = p_enh.search_for(match_str, textpage=tp_enh)
                         for r in rects:
+                            if cat in ("ID_TOKEN", "CITY_STATE") and is_in_clinical_zone(r):
+                                continue
                             add_target(r, f"{cat}_ENHANCED", match_str, engine="ocr_contrast_enhanced")
 
             # 3c. Generic Healthcare Facility & Provider Rule on CLAHE pass
-            for line in line_objects_enh:
+            for idx, line in enumerate(line_objects_enh):
+                line_str = line["text"].strip()
+                if self.is_whitelisted(line_str) or len(line_str) < 3:
+                    continue
                 if line["rect"].y1 <= header_zone_y:
-                    line_str = line["text"].strip()
-                    if self.is_whitelisted(line_str) or len(line_str) < 3:
-                        continue
                     if facility_keywords.search(line_str):
                         add_target(line["rect"], "CLINIC_FACILITY", line_str, engine="header_facility_rule_clahe")
-                    elif re.search(r"\b(?:M\.?B\.?B\.?S|M\.?D|M\.?S|D\.?M\.?R\.?D|D\.?N\.?B|F\.?R\.?C\.?R|Regn?\.?|MCI|NMC)\b", line_str, re.IGNORECASE):
+                    elif provider_creds.search(line_str):
                         add_target(line["rect"], "HEADER_PROVIDER", line_str, engine="header_provider_rule_clahe")
+                elif line["rect"].y0 >= page.rect.height * 0.50 and not is_in_clinical_zone(line["rect"]):
+                    if facility_keywords.search(line_str):
+                        adj_text = " ".join([
+                            line_objects_enh[j]["text"] for j in range(max(0, idx - 2), min(len(line_objects_enh), idx + 3))
+                        ])
+                        has_contact = bool(re.search(r"\b(?:\d{3}[\-\s.]?\d{3}[\-\s.]?\d{4}|\d{8,12}|0[23478]\s*\d{4}\s*\d{4}|Street|St|Rd|Road|Ave|Lvl|NSW|VIC|QLD|WA|SA|TAS|ACT|NT)\b", adj_text, re.IGNORECASE))
+                        if has_contact:
+                            add_target(line["rect"], "CLINIC_FACILITY", line_str, engine="footer_facility_rule_clahe")
 
             # 3d. spaCy NER on enhanced OCR text
             ner_candidates_enh = self.ner_engine.find_entities(full_enh)
@@ -927,12 +1231,16 @@ class LocalImageRedactor:
                 if not self.is_whitelisted(matched_str) and len(matched_str) >= 3:
                     rects = p_enh.search_for(matched_str, textpage=tp_enh)
                     for r in rects:
+                        if is_in_clinical_zone(r):
+                            continue
                         add_target(r, f"{cand['category']}_ENHANCED", matched_str, engine="spacy_ner_clahe")
                     if not rects and len(matched_str.split()) > 1:
                         for part in matched_str.split():
                             if len(part) >= 4 and not self.is_whitelisted(part):
                                 p_rects = p_enh.search_for(part, textpage=tp_enh)
                                 for pr in p_rects:
+                                    if is_in_clinical_zone(pr):
+                                        continue
                                     add_target(pr, f"{cand['category']}_ENHANCED", part, engine="spacy_ner_clahe")
         except Exception:
             pass
@@ -940,6 +1248,45 @@ class LocalImageRedactor:
             active_lines = line_objects
             if tmp_doc_enh is not None:
                 tmp_doc_enh.close()
+
+        # 3e. Multi-line Patient Demographic / Address Block expansion under PATIENT_NAME
+        patient_name_targets = [
+            t for t in targets
+            if (t.category.startswith("PATIENT_NAME") or t.category.startswith("PATIENT_HONORIFIC") or t.category in ("PERSON", "PERSON_ENHANCED"))
+            and t.bbox.y1 <= page.rect.height * 0.45
+            and (clinical_y0 is None or t.bbox.y1 <= clinical_y0)
+        ]
+        all_candidate_lines = list(line_objects)
+        if 'line_objects_enh' in locals() and line_objects_enh:
+            all_candidate_lines.extend(line_objects_enh)
+
+        addr_line_re = re.compile(r"[A-Za-zäöüß]+\s*\d+|\b\d{4,6}\s+[A-Za-zäöüß]+", re.IGNORECASE)
+        street_keyword_re = re.compile(
+            r"\b(?:Street|St|Road|Rd|Avenue|Ave|Drive|Dr|Way|Lane|Ln|Boulevard|Blvd|Court|Ct|Straße|Str|Weg|Platz|Allee|Gasse|Rue|Bd|Calle|Paseo|Via)\b",
+            re.IGNORECASE
+        )
+        for pt in patient_name_targets:
+            curr_y1 = pt.bbox.y1
+            curr_x0 = pt.bbox.x0
+            for _ in range(3):
+                found_next_line = False
+                for l in all_candidate_lines:
+                    v_gap = l["rect"].y0 - curr_y1
+                    x0_diff = abs(l["rect"].x0 - curr_x0)
+                    if 0 < v_gap < 25 and x0_diff < 30 and l["rect"].y1 <= page.rect.height * 0.45:
+                        if clinical_y0 is not None and l["rect"].y1 > clinical_y0:
+                            continue
+                        l_text = l["text"].strip()
+                        if self.is_whitelisted(l_text) or len(l_text) < 3:
+                            continue
+                        if addr_line_re.search(l_text) or street_keyword_re.search(l_text) or re.search(r"\b\d{4,6}\b", l_text):
+                            add_target(l["rect"], "ADDRESS_BLOCK", l_text, engine="patient_name_adjacent_address")
+                            curr_y1 = l["rect"].y1
+                            curr_x0 = l["rect"].x0
+                            found_next_line = True
+                            break
+                if not found_next_line:
+                    break
 
         # -------------------------------------------------------------------
         # 4. Zero-keyword Visual Grounder (chromatic stamps and handwritten signatures)
@@ -1058,13 +1405,23 @@ class LocalImageRedactor:
                     engine=t.engine
                 ))
 
+            from .forensics import ForensicAuditor
+            conf = ForensicAuditor.evaluate_redaction_confidence(
+                report={"redacted_targets": [t.model_dump() for t in reported_targets]},
+                extracted_text=getattr(self, "_last_extracted_text", "") or page.get_text(),
+                is_raster=True
+            )
+
             return {
                 "input_file": input_path,
                 "output_file": output_path,
                 "jurisdiction": resolved_jur,
                 "format_type": "SCANNED_RASTER_IMAGE",
                 "total_entities_redacted": len(reported_targets),
-                "redacted_targets": [t.model_dump() for t in reported_targets]
+                "redacted_targets": [t.model_dump() for t in reported_targets],
+                "confidence_score": conf["confidence_score"],
+                "triage_status": conf["triage_status"],
+                "review_reasons": conf["review_reasons"]
             }
 
         # Handle PDF Input
@@ -1127,11 +1484,21 @@ class LocalImageRedactor:
 
         doc.close()
 
+        from .forensics import ForensicAuditor
+        conf = ForensicAuditor.evaluate_redaction_confidence(
+            report={"redacted_targets": [t.model_dump() for t in all_targets]},
+            extracted_text="\n".join(collected_ocr_text),
+            is_raster=True
+        )
+
         return {
             "input_file": input_path,
             "output_file": output_path,
             "jurisdiction": resolved_jur,
             "format_type": "SCANNED_RASTER_PDF",
             "total_entities_redacted": len(all_targets),
-            "redacted_targets": [t.model_dump() for t in all_targets]
+            "redacted_targets": [t.model_dump() for t in all_targets],
+            "confidence_score": conf["confidence_score"],
+            "triage_status": conf["triage_status"],
+            "review_reasons": conf["review_reasons"]
         }
