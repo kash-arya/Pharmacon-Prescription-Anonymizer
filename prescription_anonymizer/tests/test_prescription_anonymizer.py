@@ -341,6 +341,57 @@ class TestPrescriptionAnonymizer(unittest.TestCase):
         self.assertEqual(detector.detect("UHID: AP2024-88912 ABHA ID: 91-4567-8912-3456 NMC-45892"), "IN")
         self.assertEqual(detector.detect("Generic hospital slip without statutory tags"), "GLOBAL")
 
+    def test_ocr_preprocess_module(self):
+        from src.ocr_preprocess import resolve_tessdata_path, get_ocr_languages, reconstruct_visual_lines
+        tess_dir = resolve_tessdata_path()
+        self.assertTrue(os.path.isdir(tess_dir))
+        langs = get_ocr_languages(tess_dir)
+        self.assertIn("eng", langs)
+
+        words = [
+            (10.0, 10.0, 50.0, 25.0, "Patient:"),
+            (55.0, 10.0, 100.0, 25.0, "John"),
+            (105.0, 10.0, 140.0, 25.0, "Doe"),
+            (10.0, 35.0, 40.0, 50.0, "Age:"),
+            (45.0, 35.0, 65.0, 50.0, "42")
+        ]
+        lines = reconstruct_visual_lines(words)
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(lines[0]["text"], "Patient: John Doe")
+        self.assertEqual(lines[1]["text"], "Age: 42")
+
+    def test_barcode_detector_module(self):
+        from src.barcode_detector import detect_qr_and_barcodes
+        doc = pymupdf.open(self.vector_pdf)
+        page = doc[0]
+        boxes = detect_qr_and_barcodes(page)
+        self.assertIsInstance(boxes, list)
+        doc.close()
+
+    def test_form_parser_module(self):
+        from src.form_parser import expand_person_span_on_line, detect_handwritten_fill_in_zone
+        import numpy as np
+
+        line_objs = [{
+            "rect": pymupdf.Rect(10, 10, 150, 25),
+            "text": "Mr. John Doe",
+            "words": [
+                (pymupdf.Rect(10, 10, 35, 25), "Mr."),
+                (pymupdf.Rect(40, 10, 80, 25), "John"),
+                (pymupdf.Rect(85, 10, 120, 25), "Doe")
+            ]
+        }]
+        john_rect = pymupdf.Rect(40, 10, 80, 25)
+        expanded = expand_person_span_on_line(john_rect, line_objs)
+        self.assertLessEqual(expanded.x0, 10.0)
+        self.assertGreaterEqual(expanded.x1, 120.0)
+
+        # Blank image detection returns None
+        blank_bgr = np.full((200, 200, 3), 255, dtype=np.uint8)
+        zone = pymupdf.Rect(10, 10, 100, 50)
+        ink = detect_handwritten_fill_in_zone(blank_bgr, zone, 1.0, 1.0)
+        self.assertIsNone(ink)
+
 
 if __name__ == "__main__":
     unittest.main()

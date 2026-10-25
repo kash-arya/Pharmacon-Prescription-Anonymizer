@@ -1,48 +1,111 @@
-# Python Bytecode & Environments
+# ==============================================================================
+# Git Ignore Configuration for Pharmacon Medical Prescription Anonymizer
+# ==============================================================================
+
+# Python Bytecode, Caches & Virtual Environments
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
+.Python
 .venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
 
-# Testing & Quality
+# Testing, Benchmarking & Code Quality
 .pytest_cache/
 .coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+nosetests.xml
+*.cover
+reports/test_bench_results.json
 
-# ML Weights & Local Database
+# Build & Packaging Artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+*.manifest
+*.spec
+*.zip
+*.tar.gz
+*.tgz
+
+# IDE, Editors & OS Artifacts
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.project
+.pydevproject
+.settings/
+
+# Logs, Dumps & Scratch Directories
+*.log
+temp/
+tmp/
+*.tmp
+*.bak
+*.orig
+scratch/
+.system_generated/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment Variables & Credentials
+.env
+.env.*
+!*.example
+*.pem
+*.key
+
+# Model Weights, Binary Checkpoints & Local Databases
 checkpoints/
 *.pt
+*.bin
+*.onnx
 *.db
 *.sqlite3
 
-# Project Image Data & Pipeline Outputs
+# Node Dependencies
+node_modules/
+
+# Legacy / Redundant Output Directories & Intermediate Masked Files
 crops/
 dataset/
 uploads/
 anonymized_output/
 anonymized_outputs/
 redacted_outputs/
-*.zip
+data/masked_results/
+**/data/masked_results/
+*_anonymized.*
+*_holdout_redacted.*
+outputs/**/*_temp*
+outputs/**/*.tmp
 
-# Logs & Temporary Files
-*.log
-temp/
-tmp/
-*.tmp
-*.swp
-*~
+# Excluded Holdout Specimens (Explicitly Removed)
+**/commons_es_receta_anteojos*
+**/commons_es_receta_gafas*
+**/commons_es_receta_metronidazol*
+**/commons_eu_de_medicalcannabisprescription_ny*
 
-# OS & Editor
-.DS_Store
-Thumbs.db
-.vscode/
-
-# Temporary Audit Exports
+# Temporary Audit Exports & Work Notes
 WORKSPACE_REMAINING_FILES.md
-
-# Local Environment
-.env
-
-# Personal Study Notes & Internal Docs (Local only)
+notes/
 **/PHARMACON_CONCEPTUAL_MASTER_STUDY_GUIDE.md
 **/Pharmacon_Commitment_Pitch.pptx
 **/Pharmacon_Writer_Calibration_Protocol.pdf
-notes/

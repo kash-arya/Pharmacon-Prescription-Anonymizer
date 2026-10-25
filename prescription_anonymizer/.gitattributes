@@ -1,0 +1,9 @@
+# GitHub Linguist Language Override Configuration
+# Ensure generated HTML inspection viewers and reports do not skew repository statistics
+
+*.html linguist-detectable=false
+*.html linguist-generated=true
+*.html linguist-vendored=true
+
+outputs/*.md linguist-detectable=false
+reports/*.json linguist-detectable=false

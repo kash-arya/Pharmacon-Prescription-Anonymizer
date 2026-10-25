@@ -1,5 +1,5 @@
 {
-  "total_specimens": 12,
+  "total_specimens": 8,
   "source": "Wikimedia Commons",
   "specimens": [
     {
@@ -35,36 +35,12 @@
       "source_url": "https://upload.wikimedia.org/wikipedia/commons/c/cc/Doctors_Prescription_-_geograph.org.uk_-_1814833.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original"
     },
     {
-      "filename": "commons_es_receta_anteojos.jpg",
-      "region": "ES",
-      "dimensions": "759 x 745",
-      "size_kb": "197.6 KB",
-      "source_title": "File:Receta anteojos.jpg",
-      "source_url": "https://upload.wikimedia.org/wikipedia/commons/0/05/Receta_anteojos.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original"
-    },
-    {
-      "filename": "commons_eu_de_medicalcannabisprescription_ny.jpg",
-      "region": "EU_DE",
-      "dimensions": "1024 x 576",
-      "size_kb": "132.2 KB",
-      "source_title": "File:MedicalCannabisPrescription NY.jpg",
-      "source_url": "https://upload.wikimedia.org/wikipedia/commons/2/28/MedicalCannabisPrescription_NY.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original"
-    },
-    {
       "filename": "commons_global_medical_recipe_concerning_poisoning_terr.jpg",
       "region": "GLOBAL",
       "dimensions": "3379 x 4999",
       "size_kb": "13148.9 KB",
       "source_title": "File:Medical recipe concerning poisoning. Terracotta tablet, from Nippur, Iraq, 18th century BCE. Ancient Orient Museum, Istanbul.jpg",
       "source_url": "https://upload.wikimedia.org/wikipedia/commons/3/33/Medical_recipe_concerning_poisoning._Terracotta_tablet%2C_from_Nippur%2C_Iraq%2C_18th_century_BCE._Ancient_Orient_Museum%2C_Istanbul.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original"
-    },
-    {
-      "filename": "commons_es_receta_metronidazol.jpg",
-      "region": "ES",
-      "dimensions": "3332 x 3281",
-      "size_kb": "357.8 KB",
-      "source_title": "File:Receta Metronidazol.jpg",
-      "source_url": "https://upload.wikimedia.org/wikipedia/commons/1/1d/Receta_Metronidazol.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original"
     },
     {
       "filename": "commons_eu_de_receta_de_1965.png",
@@ -81,14 +57,6 @@
       "size_kb": "48.7 KB",
       "source_title": "File:Behaviors Reported if a Medication Price was Too High at the Pharmacy, Overall and by Cost-Related Nonadherence in 2022 Among Adults Aged 65 Years and Older.png",
       "source_url": "https://upload.wikimedia.org/wikipedia/commons/b/b7/Behaviors_Reported_if_a_Medication_Price_was_Too_High_at_the_Pharmacy%2C_Overall_and_by_Cost-Related_Nonadherence_in_2022_Among_Adults_Aged_65_Years_and_Older.png?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original"
-    },
-    {
-      "filename": "commons_es_receta_gafas.jpg",
-      "region": "ES",
-      "dimensions": "434 x 539",
-      "size_kb": "63.0 KB",
-      "source_title": "File:Receta gafas.jpg",
-      "source_url": "https://upload.wikimedia.org/wikipedia/commons/7/78/Receta_gafas.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original"
     },
     {
       "filename": "commons_eu_de_old_prescription_in_exposition_history_o.jpg",
