@@ -8,7 +8,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const ANONYMIZER_URL = process.env.ANONYMIZER_URL || 'http://localhost:8000';
+const ANONYMIZER_URL = process.env.NEXT_PUBLIC_ANONYMIZER_API_URL || process.env.VITE_ANONYMIZER_API_URL || process.env.ANONYMIZER_URL || 'http://localhost:8000';
 
 /**
  * Check if the Python Anonymizer Microservice is alive and healthy.
@@ -18,7 +18,7 @@ async function checkServiceHealth() {
     const res = await fetch(`${ANONYMIZER_URL}/health`);
     const data = await res.json();
     console.log('Pharmacon Microservice Status:', data);
-    return data.status === 'healthy';
+    return data.status === 'healthy' || data.status === 'ok';
   } catch (err) {
     console.error('Anonymizer service is unreachable:', err.message);
     return false;

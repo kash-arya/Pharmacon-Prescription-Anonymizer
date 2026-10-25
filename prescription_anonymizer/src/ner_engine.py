@@ -4,6 +4,7 @@ Integrates with en_core_web_sm and xx_ent_wiki_sm to detect PERSON, LOCATION (GP
 and healthcare facility ORGs locally without sending data to external APIs.
 """
 
+import os
 import re
 from typing import List, Dict, Any, Optional
 import spacy
@@ -29,14 +30,7 @@ class LocalNEREngine:
                 except Exception:
                     cls._nlp_en = None
 
-            try:
-                import xx_ent_wiki_sm
-                cls._nlp_xx = xx_ent_wiki_sm.load()
-            except Exception:
-                try:
-                    cls._nlp_xx = spacy.load("xx_ent_wiki_sm")
-                except Exception:
-                    cls._nlp_xx = None
+            cls._nlp_xx = None
 
         return cls._instance
 
@@ -46,6 +40,15 @@ class LocalNEREngine:
 
     @property
     def nlp_xx(self):
+        if self._nlp_xx is None and os.environ.get("RENDER_LOW_MEMORY") != "1":
+            try:
+                import xx_ent_wiki_sm
+                self._nlp_xx = xx_ent_wiki_sm.load()
+            except Exception:
+                try:
+                    self._nlp_xx = spacy.load("xx_ent_wiki_sm")
+                except Exception:
+                    self._nlp_xx = None
         return self._nlp_xx
 
     def find_entities(self, text: str) -> List[Dict[str, Any]]:
@@ -68,8 +71,18 @@ class LocalNEREngine:
             text,
             re.IGNORECASE
         ))
-        if self._nlp_xx is not None and has_eu_markers:
-            models.append((self._nlp_xx, "xx"))
+        if has_eu_markers and os.environ.get("RENDER_LOW_MEMORY") != "1":
+            if self._nlp_xx is None:
+                try:
+                    import xx_ent_wiki_sm
+                    self._nlp_xx = xx_ent_wiki_sm.load()
+                except Exception:
+                    try:
+                        self._nlp_xx = spacy.load("xx_ent_wiki_sm")
+                    except Exception:
+                        self._nlp_xx = None
+            if self._nlp_xx is not None:
+                models.append((self._nlp_xx, "xx"))
 
         facility_regex = re.compile(
             r"\b(?:hospital|hospitals|clinic|clinics|diagnostics|diagnostic|imaging|laborator(?:y|ies)|centre|center|centres|centers|health|pharmacy|institute|infirmary|medical|care|dispensary|nursing|maternity|healthcare|foundation|trust|klinik|klinikum|krankenhaus|spital|praxis|hopital|hôpital|clinique|clinica|clínica|farmacia|apotheke|pharmacie|ambulatorio)\b",

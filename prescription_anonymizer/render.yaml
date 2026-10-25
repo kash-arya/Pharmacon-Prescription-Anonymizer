@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: pharmacon-prescription-anonymizer
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 8000
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: RENDER_LOW_MEMORY
+        value: "1"

@@ -14,6 +14,7 @@ from typing import List, Dict, Any, Optional, Tuple
 import os
 import re
 import io
+import gc
 import pymupdf
 import cv2
 import numpy as np
@@ -256,6 +257,9 @@ class LocalImageRedactor:
             return True
 
         def add_target(rect: pymupdf.Rect, category: str, text: str, engine: str = "ocr_dynamic"):
+            if not rect.is_valid or rect.get_area() <= 1.0:
+                return
+
             if category in ("PATIENT_NAME", "PATIENT_NAME_VALUE", "PATIENT_NAME_VALUE_CLAHE",
                             "PATIENT_NAME_VALUE_2D", "PATIENT_HONORIFIC", "PATIENT_HONORIFIC_ENHANCED",
                             "DOCTOR_NAME", "DOCTOR_NAME_ENHANCED") or \
@@ -264,7 +268,7 @@ class LocalImageRedactor:
 
             if not can_redact(rect, text):
                 return
-            if rect.get_area() <= 0:
+            if not rect.is_valid or rect.get_area() <= 0:
                 return
             for idx, r in enumerate(recorded_rects):
                 inter = rect & r
@@ -434,8 +438,20 @@ class LocalImageRedactor:
             for match in reg.finditer(full_text):
                 match_str = match.group(0).strip()
                 if not self.is_whitelisted(match_str) and len(match_str) > 2:
-                    rects = page.search_for(match_str, textpage=tp)
-                    for r in rects:
+                    raw_rects = page.search_for(match_str, textpage=tp)
+                    valid_rects = [r for r in raw_rects if r.get_area() > 1.0]
+                    if not valid_rects:
+                        continue
+                    clustered_rects = []
+                    curr_box = pymupdf.Rect(valid_rects[0])
+                    for r in valid_rects[1:]:
+                        if abs((r.y0 + r.y1)/2.0 - (curr_box.y0 + curr_box.y1)/2.0) < max(15.0, curr_box.height * 0.6) and (r.x0 - curr_box.x1 < 45.0):
+                            curr_box = curr_box | r
+                        else:
+                            clustered_rects.append(curr_box)
+                            curr_box = pymupdf.Rect(r)
+                    clustered_rects.append(curr_box)
+                    for r in clustered_rects:
                         if cat in ("ID_TOKEN", "CITY_STATE") and is_in_clinical_zone(r):
                             continue
                         add_target(r, cat, match_str, engine="regex_scanner")
@@ -512,19 +528,29 @@ class LocalImageRedactor:
         for cand in ner_candidates:
             matched_str = cand["text"]
             if not self.is_whitelisted(matched_str) and len(matched_str) >= 3:
-                rects = page.search_for(matched_str, textpage=tp)
-                for r in rects:
+                raw_rects = page.search_for(matched_str, textpage=tp)
+                valid_rects = [r for r in raw_rects if r.get_area() > 1.0]
+                clustered_rects = []
+                if valid_rects:
+                    curr_box = pymupdf.Rect(valid_rects[0])
+                    for r in valid_rects[1:]:
+                        if abs((r.y0 + r.y1)/2.0 - (curr_box.y0 + curr_box.y1)/2.0) < max(15.0, curr_box.height * 0.6) and (r.x0 - curr_box.x1 < 45.0):
+                            curr_box = curr_box | r
+                        else:
+                            clustered_rects.append(curr_box)
+                            curr_box = pymupdf.Rect(r)
+                    clustered_rects.append(curr_box)
+                for r in clustered_rects:
                     if is_in_clinical_zone(r):
                         continue
                     add_target(r, cand["category"], matched_str, engine="spacy_ner")
-                if not rects and len(matched_str.split()) > 1:
+                if not clustered_rects and len(matched_str.split()) > 1:
                     for part in matched_str.split():
                         if len(part) >= 4 and not self.is_whitelisted(part):
-                            p_rects = page.search_for(part, textpage=tp)
-                            for pr in p_rects:
-                                if is_in_clinical_zone(pr):
-                                    continue
-                                add_target(pr, cand["category"], part, engine="spacy_ner")
+                            p_raw = page.search_for(part, textpage=tp)
+                            for pr in p_raw:
+                                if pr.get_area() > 1.0 and not is_in_clinical_zone(pr):
+                                    add_target(pr, cand["category"], part, engine="spacy_ner")
 
         # -------------------------------------------------------------------
         # 3. CLAHE Contrast-Enhanced Pass (Faint Headers, Glare & Blurry Text)
@@ -559,9 +585,21 @@ class LocalImageRedactor:
                 for match in reg.finditer(full_enh):
                     match_str = match.group(0).strip()
                     if not self.is_whitelisted(match_str) and len(match_str) > 2:
-                        rects = p_enh.search_for(match_str, textpage=tp_enh)
-                        for r in rects:
-                            if cat in ("ID_TOKEN", "CITY_STATE") and is_in_clinical_zone(r):
+                        raw_rects = p_enh.search_for(match_str, textpage=tp_enh)
+                        valid_rects = [r for r in raw_rects if r.get_area() > 1.0]
+                        if not valid_rects:
+                            continue
+                        clustered_rects = []
+                        curr_box = pymupdf.Rect(valid_rects[0])
+                        for r in valid_rects[1:]:
+                            if abs((r.y0 + r.y1)/2.0 - (curr_box.y0 + curr_box.y1)/2.0) < max(15.0, curr_box.height * 0.6) and (r.x0 - curr_box.x1 < 45.0):
+                                curr_box = curr_box | r
+                            else:
+                                clustered_rects.append(curr_box)
+                                curr_box = pymupdf.Rect(r)
+                        clustered_rects.append(curr_box)
+                        for r in clustered_rects:
+                            if is_in_clinical_zone(r):
                                 continue
                             add_target(r, f"{cat}_ENHANCED", match_str, engine="ocr_contrast_enhanced")
 
@@ -589,19 +627,29 @@ class LocalImageRedactor:
             for cand in ner_candidates_enh:
                 matched_str = cand["text"]
                 if not self.is_whitelisted(matched_str) and len(matched_str) >= 3:
-                    rects = p_enh.search_for(matched_str, textpage=tp_enh)
-                    for r in rects:
+                    raw_rects = p_enh.search_for(matched_str, textpage=tp_enh)
+                    valid_rects = [r for r in raw_rects if r.get_area() > 1.0]
+                    clustered_rects = []
+                    if valid_rects:
+                        curr_box = pymupdf.Rect(valid_rects[0])
+                        for r in valid_rects[1:]:
+                            if abs((r.y0 + r.y1)/2.0 - (curr_box.y0 + curr_box.y1)/2.0) < max(15.0, curr_box.height * 0.6) and (r.x0 - curr_box.x1 < 45.0):
+                                curr_box = curr_box | r
+                            else:
+                                clustered_rects.append(curr_box)
+                                curr_box = pymupdf.Rect(r)
+                        clustered_rects.append(curr_box)
+                    for r in clustered_rects:
                         if is_in_clinical_zone(r):
                             continue
                         add_target(r, f"{cand['category']}_ENHANCED", matched_str, engine="spacy_ner_clahe")
-                    if not rects and len(matched_str.split()) > 1:
+                    if not clustered_rects and len(matched_str.split()) > 1:
                         for part in matched_str.split():
                             if len(part) >= 4 and not self.is_whitelisted(part):
-                                p_rects = p_enh.search_for(part, textpage=tp_enh)
-                                for pr in p_rects:
-                                    if is_in_clinical_zone(pr):
-                                        continue
-                                    add_target(pr, f"{cand['category']}_ENHANCED", part, engine="spacy_ner_clahe")
+                                p_raw = p_enh.search_for(part, textpage=tp_enh)
+                                for pr in p_raw:
+                                    if pr.get_area() > 1.0 and not is_in_clinical_zone(pr):
+                                        add_target(pr, f"{cand['category']}_ENHANCED", part, engine="spacy_ner_clahe")
         except Exception:
             pass
         finally:
@@ -697,9 +745,24 @@ class LocalImageRedactor:
         if is_image_input:
             with Image.open(input_path) as orig_img:
                 orig_w, orig_h = orig_img.size
-
-            with pymupdf.open(input_path) as img_doc:
-                pdf_bytes = img_doc.convert_to_pdf()
+                if max(orig_w, orig_h) > 2400:
+                    scale_down = 2400.0 / max(orig_w, orig_h)
+                    new_w = max(1, int(orig_w * scale_down))
+                    new_h = max(1, int(orig_h * scale_down))
+                    resized_img = orig_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                    img_bytes_io = io.BytesIO()
+                    if resized_img.mode in ("RGBA", "LA") or (resized_img.mode == "P" and "transparency" in resized_img.info):
+                        resized_img.save(img_bytes_io, format="PNG")
+                        ftype = "png"
+                    else:
+                        resized_img.convert("RGB").save(img_bytes_io, format="JPEG", quality=95)
+                        ftype = "jpeg"
+                    img_bytes_io.seek(0)
+                    with pymupdf.open(stream=img_bytes_io.getvalue(), filetype=ftype) as img_doc:
+                        pdf_bytes = img_doc.convert_to_pdf()
+                else:
+                    with pymupdf.open(input_path) as img_doc:
+                        pdf_bytes = img_doc.convert_to_pdf()
             doc = pymupdf.open("pdf", pdf_bytes)
             page = doc[0]
 
@@ -748,6 +811,7 @@ class LocalImageRedactor:
                 doc.save(output_path, garbage=4, deflate=True)
 
             doc.close()
+            gc.collect()
 
             reported_targets = []
             for t in targets:
@@ -842,6 +906,7 @@ class LocalImageRedactor:
             doc.save(output_path, garbage=4, deflate=True)
 
         doc.close()
+        gc.collect()
 
         conf = ForensicAuditor.evaluate_redaction_confidence(
             report={"redacted_targets": [t.model_dump() for t in all_targets]},
