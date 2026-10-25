@@ -114,7 +114,7 @@ def get_enhanced_fullpage_ocr(
         effective_dpi = 300
     elif max_pt < 900:
         effective_dpi = dpi if (page.rect.width >= 550 and page.rect.height >= 700) else 200
-    elif max_pt <= 2000:
+    elif max_pt <= 2500:
         effective_dpi = dpi
     else:
         effective_dpi = 72

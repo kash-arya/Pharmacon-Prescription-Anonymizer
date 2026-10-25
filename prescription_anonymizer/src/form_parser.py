@@ -393,7 +393,7 @@ def parse_form_anchors_on_lines(
                     sublabel_rect = sublabel_rect | sw[0]
                 add_target_fn(sublabel_rect, f"{a_cat}_LABEL{suffix}", same_line_text, engine=f"form_sublabel{suffix.lower()}")
                 has_same_line_val = False
-            elif same_line_words and len(clean_val) > 2 and not is_emergency_header and not re.match(r"^(?:oe|—|_|-|~)+$", clean_val, re.I):
+            elif same_line_words and len(clean_val) > 2 and not is_emergency_header and not check_whitelist(same_line_text) and not re.match(r"^(?:oe|—|_|-|~)+$", clean_val, re.I):
                 val_rect = same_line_words[0][0]
                 for sw in same_line_words[1:]:
                     val_rect = val_rect | sw[0]
@@ -403,8 +403,18 @@ def parse_form_anchors_on_lines(
                     val_rect.x1 + 2,
                     min(split_bottom, val_rect.y1 + 2)
                 )
-                add_target_fn(val_rect, f"{a_cat}_VALUE{suffix}", same_line_text, engine=f"form_field_expansion{suffix.lower()}")
-                has_same_line_val = True
+                is_clinical_encroachment = False
+                if whitelisted_rects:
+                    for wr in whitelisted_rects:
+                        inter = val_rect & wr
+                        if not inter.is_empty and inter.get_area() > 0.15 * min(val_rect.get_area(), wr.get_area()):
+                            is_clinical_encroachment = True
+                            break
+                if not is_clinical_encroachment:
+                    add_target_fn(val_rect, f"{a_cat}_VALUE{suffix}", same_line_text, engine=f"form_field_expansion{suffix.lower()}")
+                    has_same_line_val = True
+                else:
+                    has_same_line_val = False
             else:
                 has_same_line_val = False
 

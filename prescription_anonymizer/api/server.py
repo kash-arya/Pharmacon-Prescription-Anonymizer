@@ -47,9 +47,9 @@ SUPPORTED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp"
 # --- OpenAPI / Pydantic Typed Response Models ---
 
 class HealthResponse(BaseModel):
-    status: str = Field(..., description="Service status", examples=["healthy"])
-    service: str = Field(..., description="Service name", examples=["Pharmacon Anonymizer"])
-    version: str = Field(..., description="Service version", examples=["2.0.0"])
+    status: str = Field("ok", description="Service status", examples=["ok"])
+    service: str = Field("Pharmacon Anonymizer", description="Service name", examples=["Pharmacon Anonymizer"])
+    version: str = Field("2.0.0", description="Service version", examples=["2.0.0"])
     tessdata_directory: str = Field(..., description="Path to resolved Tesseract training assets")
     tesseract_model_present: bool = Field(..., description="Whether eng.traineddata exists")
     supported_extensions: List[str] = Field(..., description="Whitelisted document file extensions")
@@ -119,14 +119,27 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-# Enable CORS for seamless integration with Node.js and frontend applications
+# Enable CORS for seamless integration with Vercel frontend, Node.js, and external clients
+allowed_origins_env = os.environ.get("ALLOWED_ORIGINS")
+if allowed_origins_env:
+    allow_origins = [orig.strip() for orig in allowed_origins_env.split(",") if orig.strip()]
+else:
+    allow_origins = ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=allow_origins,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Redacted-Count", "X-Format-Type", "X-Jurisdiction", "Content-Disposition"]
+    expose_headers=[
+        "Content-Disposition",
+        "X-Redacted-Count",
+        "X-Jurisdiction",
+        "X-Confidence-Score",
+        "X-Triage-Status",
+        "X-Format-Type"
+    ]
 )
 
 # Shared redactor singletons to avoid repeated instantiation overhead
@@ -214,7 +227,7 @@ async def health_check():
     """Health and readiness probe."""
     tess_path = resolve_tessdata_path()
     return {
-        "status": "healthy",
+        "status": "ok",
         "service": "Pharmacon Anonymizer",
         "version": "2.0.0",
         "tessdata_directory": tess_path,
