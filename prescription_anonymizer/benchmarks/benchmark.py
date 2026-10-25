@@ -309,18 +309,6 @@ def evaluate_test_case(case: Dict[str, Any], samples_dir: str, output_dir: str, 
         report = redactor.redact(input_path, output_path)
         engine_name = "Local OCR Image Redactor"
 
-    # Mirror into data/masked_results/
-    try:
-        subfolder = os.path.dirname(case["filename"]) or "samples"
-        clean_subfolder = "samples" if subfolder in ("", "extracted_images") else subfolder
-        masked_mirror_dir = os.path.join(REPO_ROOT, "data", "masked_results", clean_subfolder)
-        os.makedirs(masked_mirror_dir, exist_ok=True)
-        mirror_path = os.path.join(masked_mirror_dir, f"{clean_base}_MASKED{ext}")
-        import shutil
-        shutil.copyfile(output_path, mirror_path)
-    except Exception:
-        pass
-
     elapsed_ms = (time.perf_counter() - start_time) * 1000
 
     # 2. Text Extraction on Redacted Document

@@ -144,16 +144,6 @@ def build_holdout_data(holdout_dir: str, temp_out_dir: str) -> Dict[str, Any]:
             report = redactor.redact(input_path, output_path, jurisdiction="AUTO")
             engine_name = "Local OCR Anchor Engine (PyMuPDF + Tesseract)"
 
-        # Mirror into data/masked_results/unseen_holdout/
-        try:
-            mirror_dir = os.path.join(REPO_ROOT, "data", "masked_results", "unseen_holdout")
-            os.makedirs(mirror_dir, exist_ok=True)
-            mirror_path = os.path.join(mirror_dir, f"{base}_MASKED{ext}")
-            import shutil
-            shutil.copyfile(output_path, mirror_path)
-        except Exception:
-            pass
-
         t1 = time.time()
         latency_ms = round((t1 - t0) * 1000.0, 1)
 

@@ -8,10 +8,12 @@ Processes all prescription specimens across all 4 dataset folders:
   - data/raw_public_slips/
   - data/unseen_holdout/
 
-Outputs directly into data/masked_results/ inside the workspace:
-  1. data/masked_results/<subfolder>/<name>_MASKED.<ext>
-  2. data/masked_results/<subfolder>/<name>_SIDE_BY_SIDE.jpg (Side-by-side visual audit)
-  3. data/masked_results/SUMMARY_REPORT.md (Complete Markdown Audit Table)
+Outputs directly into outputs/ inside the workspace:
+  1. outputs/<subfolder>/<name>_SIDE_BY_SIDE.jpg (Side-by-side visual audit)
+  2. outputs/SUMMARY_REPORT.md (Complete Markdown Audit Table)
+
+Standalone masked documents are rendered via secure temporary files and
+deleted immediately after generating the side-by-side comparison image.
 """
 
 from typing import Dict, Any, List, Optional, Tuple
@@ -20,6 +22,7 @@ import sys
 import time
 import argparse
 import datetime
+import tempfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import pymupdf
 from PIL import Image, ImageDraw, ImageFont
@@ -153,28 +156,30 @@ def generate_side_by_side_image(
 
 
 def process_single_specimen(args_tuple: Tuple[str, str, str, str]) -> Dict[str, Any]:
-    """Worker process: Anonymizes single document and generates side-by-side JPEG."""
+    """Worker process: Anonymizes single document in temporary file and generates side-by-side JPEG."""
     input_path, folder_name, out_root, tessdata_dir = args_tuple
     fname = os.path.basename(input_path)
     base, ext = os.path.splitext(fname)
 
     sub_dir = os.path.join(out_root, folder_name)
     os.makedirs(sub_dir, exist_ok=True)
-
-    masked_path = os.path.join(sub_dir, f"{base}_MASKED{ext}")
     side_by_side_path = os.path.join(sub_dir, f"{base}_SIDE_BY_SIDE.jpg")
 
+    temp_masked_file = None
     t0 = time.time()
     try:
+        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp_f:
+            temp_masked_file = tmp_f.name
+
         struct = inspect_pdf_structure(input_path)
         fmt = struct["format_type"]
 
         if fmt == "VECTOR_DIGITAL":
             redactor = VectorPDFRedactor()
-            report = redactor.redact(input_path, masked_path, jurisdiction="AUTO")
+            report = redactor.redact(input_path, temp_masked_file, jurisdiction="AUTO")
         else:
             redactor = LocalImageRedactor(tessdata_dir=tessdata_dir)
-            report = redactor.redact(input_path, masked_path, jurisdiction="AUTO")
+            report = redactor.redact(input_path, temp_masked_file, jurisdiction="AUTO")
 
         elapsed_ms = round((time.time() - t0) * 1000.0, 1)
 
@@ -194,12 +199,11 @@ def process_single_specimen(args_tuple: Tuple[str, str, str, str]) -> Dict[str, 
             "triage_status": triage_status,
             "review_reasons": review_reasons,
             "elapsed_ms": elapsed_ms,
-            "masked_file": masked_path,
             "side_by_side_file": side_by_side_path,
             "status": "SUCCESS"
         }
 
-        generate_side_by_side_image(input_path, masked_path, side_by_side_path, meta)
+        generate_side_by_side_image(input_path, temp_masked_file, side_by_side_path, meta)
         return meta
 
     except Exception as ex:
@@ -213,11 +217,16 @@ def process_single_specimen(args_tuple: Tuple[str, str, str, str]) -> Dict[str, 
             "triage_status": "NEEDS_HUMAN_REVIEW",
             "review_reasons": [str(ex)],
             "elapsed_ms": round((time.time() - t0) * 1000.0, 1),
-            "masked_file": "",
             "side_by_side_file": "",
             "status": "ERROR",
             "error": str(ex)
         }
+    finally:
+        if temp_masked_file and os.path.exists(temp_masked_file):
+            try:
+                os.remove(temp_masked_file)
+            except Exception:
+                pass
 
 
 def discover_specimens(data_root: str) -> List[Tuple[str, str]]:
@@ -243,7 +252,7 @@ def discover_specimens(data_root: str) -> List[Tuple[str, str]]:
 
 
 def write_summary_report(results: List[Dict[str, Any]], report_path: str) -> None:
-    """Generates the Markdown summary report table at data/masked_results/SUMMARY_REPORT.md."""
+    """Generates the Markdown summary report table at outputs/SUMMARY_REPORT.md."""
     total_docs = len(results)
     successful_docs = sum(1 for r in results if r.get("status") == "SUCCESS")
     total_entities = sum(r.get("total_entities_redacted", 0) for r in results)
@@ -269,8 +278,8 @@ def write_summary_report(results: List[Dict[str, Any]], report_path: str) -> Non
         "",
         "## Summary Results Table",
         "",
-        "| Folder | Document Name | Format | Jurisdiction | Entities Redacted | Confidence | Triage Status | Masked Output | Side-by-Side Comparison |",
-        "|:-------|:--------------|:-------|:------------:|:-----------------:|:----------:|:-------------:|:--------------|:------------------------|"
+        "| Folder | Document Name | Format | Jurisdiction | Entities Redacted | Confidence | Triage Status | Side-by-Side Comparison |",
+        "|:-------|:--------------|:-------|:------------:|:-----------------:|:----------:|:-------------:|:------------------------|"
     ]
 
     for r in sorted(results, key=lambda x: (x.get("folder", ""), x.get("filename", ""))):
@@ -284,13 +293,10 @@ def write_summary_report(results: List[Dict[str, Any]], report_path: str) -> Non
         triage_badge = f"**{triage}**" if triage == "AUTO_APPROVED" else f"<span style='color:red;'>**{triage}**</span>"
 
         base, ext = os.path.splitext(fn)
-        masked_rel = f"{folder}/{base}_MASKED{ext}"
         side_rel = f"{folder}/{base}_SIDE_BY_SIDE.jpg"
-
-        masked_link = f"[`{base}_MASKED{ext}`]({masked_rel})"
         side_link = f"[`View Side-by-Side`]({side_rel})"
 
-        lines.append(f"| `{folder}` | `{fn}` | `{fmt}` | `{jur}` | {redacted} | {conf} | {triage_badge} | {masked_link} | {side_link} |")
+        lines.append(f"| `{folder}` | `{fn}` | `{fmt}` | `{jur}` | {redacted} | {conf} | {triage_badge} | {side_link} |")
 
     lines.extend([
         "",
@@ -307,10 +313,10 @@ def write_summary_report(results: List[Dict[str, Any]], report_path: str) -> Non
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Export all masked results and side-by-side comparisons into workspace.")
+    parser = argparse.ArgumentParser(description="Export all masked side-by-side comparisons into workspace outputs directory.")
     parser.add_argument("--workers", type=int, default=min(8, os.cpu_count() or 4), help="Number of parallel worker processes")
     parser.add_argument("--data-dir", default=os.path.join(REPO_ROOT, "data"), help="Root data directory")
-    parser.add_argument("--out-dir", default=os.path.join(REPO_ROOT, "data", "masked_results"), help="Destination directory")
+    parser.add_argument("--out-dir", default=os.path.join(REPO_ROOT, "outputs"), help="Destination directory")
     args = parser.parse_args()
 
     tessdata_dir = resolve_tessdata_path()
