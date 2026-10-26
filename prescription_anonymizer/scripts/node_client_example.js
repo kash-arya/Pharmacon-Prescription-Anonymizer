@@ -149,6 +149,129 @@ module.exports = {
   anonymizeBatchZip
 };
 
+/**
+ * ============================================================================
+ * VERCEL / NEXT.JS / REACT FRONTEND INTEGRATION COMPONENT EXAMPLE
+ * ============================================================================
+ * 
+ * Below is a production React component demonstrating:
+ * 1. File Upload (PDF, JPG, PNG, WEBP)
+ * 2. Left (Original) vs Right (Anonymized) side-by-side inspection
+ * 3. Instant client-side download in original file format using `download_file_base64`
+ * 
+ * ```tsx
+ * import React, { useState } from 'react';
+ * 
+ * interface PreviewResult {
+ *   filename: string;
+ *   anonymized_filename: string;
+ *   mime_type: string;
+ *   format_type: string;
+ *   jurisdiction: string;
+ *   total_entities_redacted: number;
+ *   confidence_score: number;
+ *   triage_status: 'AUTO_APPROVED' | 'NEEDS_HUMAN_REVIEW';
+ *   review_reasons: string[];
+ *   original_image_base64: string;
+ *   redacted_image_base64: string;
+ *   side_by_side_image_base64: string;
+ *   download_file_base64: string;
+ * }
+ * 
+ * export function PrescriptionAnonymizerViewer() {
+ *   const [loading, setLoading] = useState(false);
+ *   const [result, setResult] = useState<PreviewResult | null>(null);
+ *   const [error, setError] = useState<string | null>(null);
+ * 
+ *   const apiUrl = process.env.NEXT_PUBLIC_ANONYMIZER_API_URL || 'http://localhost:8000';
+ * 
+ *   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
+ *     const file = e.target.files?.[0];
+ *     if (!file) return;
+ * 
+ *     setLoading(true);
+ *     setError(null);
+ * 
+ *     const fd = new FormData();
+ *     fd.append('file', file);
+ * 
+ *     try {
+ *       const res = await fetch(`${apiUrl}/anonymize/preview`, {
+ *         method: 'POST',
+ *         body: fd,
+ *       });
+ *       if (!res.ok) throw new Error(`Server returned ${res.status}: ${await res.text()}`);
+ *       const data: PreviewResult = await res.json();
+ *       setResult(data);
+ *     } catch (err: any) {
+ *       setError(err.message || 'Anonymization request failed');
+ *     } finally {
+ *       setLoading(false);
+ *     }
+ *   }
+ * 
+ *   function triggerDownload() {
+ *     if (!result?.download_file_base64) return;
+ *     const a = document.createElement('a');
+ *     a.href = result.download_file_base64;
+ *     a.download = result.anonymized_filename;
+ *     document.body.appendChild(a);
+ *     a.click();
+ *     document.body.removeChild(a);
+ *   }
+ * 
+ *   return (
+ *     <div className="p-6 max-w-6xl mx-auto space-y-6">
+ *       <div className="flex items-center justify-between border-b pb-4">
+ *         <h1 className="text-2xl font-bold">Pharmacon Medical Prescription Anonymizer</h1>
+ *         <input type="file" accept=".pdf,.png,.jpg,.jpeg,.webp" onChange={handleUpload} disabled={loading} />
+ *       </div>
+ * 
+ *       {loading && <p className="text-blue-600 font-medium">De-identifying document & generating visual previews...</p>}
+ *       {error && <p className="text-red-600 font-medium">{error}</p>}
+ * 
+ *       {result && (
+ *         <div className="space-y-6">
+ *           <div className="flex items-center justify-between bg-slate-100 p-4 rounded-lg">
+ *             <div className="space-x-4">
+ *               <span className="font-semibold">{result.filename}</span>
+ *               <span className="text-sm px-2 py-1 bg-slate-200 rounded">{result.format_type}</span>
+ *               <span className="text-sm px-2 py-1 bg-slate-200 rounded">Jurisdiction: {result.jurisdiction}</span>
+ *               <span className="text-sm px-2 py-1 bg-blue-100 text-blue-800 rounded">
+ *                 Redacted: {result.total_entities_redacted} entities
+ *               </span>
+ *               <span className={`text-sm px-2 py-1 rounded font-bold ${
+ *                 result.triage_status === 'AUTO_APPROVED' ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'
+ *               }`}>
+ *                 {result.triage_status} ({Math.round(result.confidence_score * 100)}%)
+ *               </span>
+ *             </div>
+ *             <button
+ *               onClick={triggerDownload}
+ *               className="px-4 py-2 bg-emerald-600 text-white rounded font-medium hover:bg-emerald-700"
+ *             >
+ *               Download in Original Format ({result.mime_type})
+ *             </button>
+ *           </div>
+ * 
+ *           <div className="grid grid-cols-2 gap-6">
+ *             <div className="border rounded-lg p-3 bg-white shadow-sm">
+ *               <h2 className="text-lg font-semibold text-slate-700 mb-2">Original Prescription (Left)</h2>
+ *               <img src={result.original_image_base64} alt="Original" className="w-full object-contain border rounded" />
+ *             </div>
+ *             <div className="border rounded-lg p-3 bg-white shadow-sm">
+ *               <h2 className="text-lg font-semibold text-emerald-700 mb-2">Anonymized Prescription (Right)</h2>
+ *               <img src={result.redacted_image_base64} alt="Anonymized" className="w-full object-contain border rounded" />
+ *             </div>
+ *           </div>
+ *         </div>
+ *       )}
+ *     </div>
+ *   );
+ * }
+ * ```
+ */
+
 // Standalone execution demo
 if (require.main === module) {
   (async () => {

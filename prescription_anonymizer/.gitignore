@@ -103,6 +103,10 @@ outputs/**/*.tmp
 **/commons_es_receta_metronidazol*
 **/commons_eu_de_medicalcannabisprescription_ny*
 
+# Static Base64 HTML Viewers (Prevents GitHub Linguist skew & repo bloat)
+viewer/*.html
+**/viewer/*.html
+
 # Temporary Audit Exports & Work Notes
 WORKSPACE_REMAINING_FILES.md
 notes/

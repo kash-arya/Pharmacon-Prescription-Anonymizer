@@ -261,8 +261,23 @@ class TestPrescriptionAnonymizer(unittest.TestCase):
         self.assertEqual(data["status"], "SUCCESS")
         self.assertEqual(data["format_type"], "VECTOR_DIGITAL")
         self.assertGreaterEqual(data["total_entities_redacted"], 10)
-        self.assertTrue(data["original_image"].startswith("data:image/jpeg;base64,"))
-        self.assertTrue(data["redacted_image"].startswith("data:image/jpeg;base64,"))
+        self.assertTrue(data["original_image_base64"].startswith("data:image/png;base64,"))
+        self.assertTrue(data["redacted_image_base64"].startswith("data:image/png;base64,"))
+        self.assertTrue(data["side_by_side_image_base64"].startswith("data:image/jpeg;base64,"))
+        self.assertTrue(data["download_file_base64"].startswith("data:application/pdf;base64,"))
+        self.assertTrue(data["original_image"].startswith("data:image/"))
+        self.assertTrue(data["redacted_image"].startswith("data:image/"))
+
+    def test_api_anonymize_file_direct_download(self):
+        from fastapi.testclient import TestClient
+        from api.server import app
+        client = TestClient(app)
+        with open(self.vector_pdf, "rb") as f:
+            res = client.post("/anonymize/file", files={"file": ("prescription_sample.pdf", f, "application/pdf")})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.headers.get("content-type"), "application/pdf")
+        self.assertEqual(res.headers.get("content-disposition"), 'attachment; filename="prescription_sample_anonymized.pdf"')
+        self.assertIn("x-redacted-count", res.headers)
 
     def test_api_anonymize_batch_endpoint(self):
         import io
