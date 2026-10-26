@@ -24,9 +24,14 @@ RUN python -m spacy download xx_ent_wiki_sm
 COPY . .
 
 # Environment setup
-ENV PYTHONUNBUFFERED=1
-ENV PORT=8000
-ENV TESSDATA_PREFIX=/app/data/tessdata
+ENV PYTHONUNBUFFERED=1 \
+    PORT=8000 \
+    RENDER_LOW_MEMORY=1 \
+    MALLOC_TRIM_THRESHOLD_=65536 \
+    MALLOC_MMAP_THRESHOLD_=65536 \
+    OMP_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1 \
+    TESSDATA_PREFIX=/app/data/tessdata
 
 EXPOSE 8000
 

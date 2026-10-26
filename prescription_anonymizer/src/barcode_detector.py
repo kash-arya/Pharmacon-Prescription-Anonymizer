@@ -7,6 +7,7 @@ and Sobel gradient validation to eliminate false positives on clinical text.
 """
 
 from typing import List, Tuple, Optional
+import os
 import pymupdf
 import cv2
 import numpy as np
@@ -93,18 +94,19 @@ def detect_qr_and_barcodes(
                 detected_candidates.append((pts.reshape(-1, 2), 0.0, 0.0))
 
         # Pass 2: Overlapping horizontal sliding window across 100% of the page.
-        # Prevents downsampling loss on high-res images (e.g. 30MP phone scans) and eliminates blind spots.
-        h_gray = gray.shape[0]
-        tile_h = max(200, int(h_gray * 0.30))
-        step_h = max(100, int(h_gray * 0.20))
-        for y_start in range(0, h_gray, step_h):
-            y_end = min(h_gray, y_start + tile_h)
-            tile = gray[y_start:y_end, :]
-            ok_t, pts_t = bd.detectMulti(tile)
-            if ok_t and pts_t is not None and len(pts_t) > 0:
-                pts_list_t = pts_t if pts_t.ndim == 3 else [pts_t]
-                for pts in pts_list_t:
-                    detected_candidates.append((pts.reshape(-1, 2), 0.0, float(y_start)))
+        # Skip when RENDER_LOW_MEMORY=1 to stay within Render 512MB RAM constraints
+        if os.environ.get("RENDER_LOW_MEMORY") != "1":
+            h_gray = gray.shape[0]
+            tile_h = max(200, int(h_gray * 0.30))
+            step_h = max(100, int(h_gray * 0.20))
+            for y_start in range(0, h_gray, step_h):
+                y_end = min(h_gray, y_start + tile_h)
+                tile = gray[y_start:y_end, :]
+                ok_t, pts_t = bd.detectMulti(tile)
+                if ok_t and pts_t is not None and len(pts_t) > 0:
+                    pts_list_t = pts_t if pts_t.ndim == 3 else [pts_t]
+                    for pts in pts_list_t:
+                        detected_candidates.append((pts.reshape(-1, 2), 0.0, float(y_start)))
 
         for pts, off_x, off_y in detected_candidates:
             # Validate 1D barcode candidates: vertical-bar barcodes have mean(|dx|) > 2.2 * mean(|dy|)

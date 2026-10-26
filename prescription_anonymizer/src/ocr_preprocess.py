@@ -110,14 +110,18 @@ def get_enhanced_fullpage_ocr(
 ) -> Tuple[List[Any], pymupdf.Page, pymupdf.TextPage, pymupdf.Document]:
     """Performs CLAHE adaptive contrast preprocessing, denoising, and unsharp masking."""
     max_pt = max(page.rect.width, page.rect.height)
-    if max_pt < 550:
-        effective_dpi = 300
-    elif max_pt < 900:
-        effective_dpi = dpi if (page.rect.width >= 550 and page.rect.height >= 700) else 200
-    elif max_pt <= 2500:
-        effective_dpi = dpi
+    is_low_mem = os.environ.get("RENDER_LOW_MEMORY") == "1"
+    if is_low_mem:
+        effective_dpi = 200 if max_pt < 550 else 120
     else:
-        effective_dpi = 72
+        if max_pt < 550:
+            effective_dpi = 300
+        elif max_pt < 900:
+            effective_dpi = dpi if (page.rect.width >= 550 and page.rect.height >= 700) else 200
+        elif max_pt <= 2500:
+            effective_dpi = dpi
+        else:
+            effective_dpi = 72
 
     pix = page.get_pixmap(dpi=effective_dpi, clip=pymupdf.Rect(0, 0, page.rect.width, page.rect.height * h_ratio))
     arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape((pix.height, pix.width, pix.n))
@@ -143,6 +147,11 @@ def get_enhanced_fullpage_ocr(
     ocr_lang = lang if lang is not None else get_ocr_languages(tessdata_dir)
     tp_enh = p_enh.get_textpage_ocr(language=ocr_lang, dpi=effective_dpi, tessdata=tessdata_dir)
     words_enh = p_enh.get_text("words", textpage=tp_enh)
+
+    try:
+        del pix, arr, gray, cl_img, blurred, sharpened, buf
+    except Exception:
+        pass
 
     return words_enh, p_enh, tp_enh, tmp_doc
 
