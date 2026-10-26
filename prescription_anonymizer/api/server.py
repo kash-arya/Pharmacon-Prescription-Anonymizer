@@ -19,6 +19,8 @@ import shutil
 import zipfile
 import json
 import io
+import gc
+import ctypes
 from typing import Optional, Literal, List, Dict, Any
 from pydantic import BaseModel, Field
 from PIL import Image, ImageDraw, ImageFont
@@ -185,10 +187,11 @@ def _cleanup_dir(dir_path: str):
         shutil.rmtree(dir_path, ignore_errors=True)
 
 
-def _render_page_to_pil(file_path: str, page_num: int = 0, dpi: int = 150) -> Image.Image:
+def _render_page_to_pil(file_path: str, page_num: int = 0, dpi: int = 150, max_height: Optional[int] = None) -> Image.Image:
     """Renders a single page of a PDF or loads an image into a clean RGB PIL Image."""
     _, ext = os.path.splitext(file_path)
     ext_lower = ext.lower()
+    img = None
     if ext_lower == ".pdf":
         doc = pymupdf.open(file_path)
         try:
@@ -197,21 +200,42 @@ def _render_page_to_pil(file_path: str, page_num: int = 0, dpi: int = 150) -> Im
             page_idx = min(page_num, len(doc) - 1)
             page = doc[page_idx]
             pix = page.get_pixmap(dpi=dpi)
-            if pix.n >= 4:
-                return Image.frombytes("RGBA", [pix.width, pix.height], pix.samples).convert("RGB")
-            return Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            try:
+                if pix.n >= 4:
+                    img = Image.frombytes("RGBA", [pix.width, pix.height], pix.samples).convert("RGB")
+                else:
+                    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            finally:
+                del pix
         finally:
             doc.close()
     else:
+        is_low_mem = os.environ.get("RENDER_LOW_MEMORY") == "1"
         try:
-            doc = pymupdf.open(file_path)
-            pix = doc[0].get_pixmap(dpi=dpi)
-            doc.close()
-            if pix.n >= 4:
-                return Image.frombytes("RGBA", [pix.width, pix.height], pix.samples).convert("RGB")
-            return Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            with Image.open(file_path) as im:
+                if is_low_mem and max(im.size) > 1200:
+                    im.draft("RGB", (max_height or 850, max_height or 850))
+                img = im.convert("RGB")
         except Exception:
-            return Image.open(file_path).convert("RGB")
+            doc = pymupdf.open(file_path)
+            try:
+                pix = doc[0].get_pixmap(dpi=dpi)
+                try:
+                    if pix.n >= 4:
+                        img = Image.frombytes("RGBA", [pix.width, pix.height], pix.samples).convert("RGB")
+                    else:
+                        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                finally:
+                    del pix
+            finally:
+                doc.close()
+
+    if img is not None and max_height is not None and img.height > max_height:
+        scale = float(max_height) / img.height
+        new_w = max(1, int(img.width * scale))
+        img = img.resize((new_w, max_height), Image.Resampling.LANCZOS)
+
+    return img
 
 
 def _pil_to_base64_data_uri(img: Image.Image, format: str = "PNG", quality: int = 85) -> str:
@@ -238,7 +262,9 @@ def _generate_side_by_side_base64(
     Left: Original Prescription
     Right: Anonymized Output with Triage Status & Confidence Badge
     """
-    target_h = max(700, min(1200, max(orig_img.height, red_img.height)))
+    is_low_mem = os.environ.get("RENDER_LOW_MEMORY") == "1"
+    max_h_limit = 850 if is_low_mem else 1200
+    target_h = max(600 if is_low_mem else 700, min(max_h_limit, max(orig_img.height, red_img.height)))
     w_orig = max(1, int(orig_img.width * (target_h / orig_img.height)))
     w_red = max(1, int(red_img.width * (target_h / red_img.height)))
 
@@ -281,8 +307,9 @@ def _generate_side_by_side_base64(
     canvas.paste(red_scaled, (rx0, header_h))
 
     buf = io.BytesIO()
-    canvas.save(buf, format="JPEG", quality=85)
+    canvas.save(buf, format="JPEG", quality=80 if is_low_mem else 85)
     b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+    del canvas, orig_scaled, red_scaled
     return f"data:image/jpeg;base64,{b64}"
 
 
@@ -612,22 +639,44 @@ async def anonymize_prescription_preview(
     reasons = report.get("review_reasons", [])
     mime_type = MIME_MAP.get(ext_lower, "application/octet-stream")
 
-    try:
-        orig_pil = _render_page_to_pil(input_path, page_num=page, dpi=150)
-        red_pil = _render_page_to_pil(output_path, page_num=page, dpi=150)
+    is_low_mem = os.environ.get("RENDER_LOW_MEMORY") == "1"
+    preview_dpi = 96 if is_low_mem else 150
+    preview_max_h = 850 if is_low_mem else None
+    preview_fmt = "JPEG" if is_low_mem else "PNG"
+    preview_quality = 80 if is_low_mem else 85
 
-        orig_png_b64 = _pil_to_base64_data_uri(orig_pil, format="PNG")
-        red_png_b64 = _pil_to_base64_data_uri(red_pil, format="PNG")
+    gc.collect()
+    try:
+        import ctypes
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
+
+    try:
+        orig_pil = _render_page_to_pil(input_path, page_num=page, dpi=preview_dpi, max_height=preview_max_h)
+        red_pil = _render_page_to_pil(output_path, page_num=page, dpi=preview_dpi, max_height=preview_max_h)
+
+        orig_preview_b64 = _pil_to_base64_data_uri(orig_pil, format=preview_fmt, quality=preview_quality)
+        red_preview_b64 = _pil_to_base64_data_uri(red_pil, format=preview_fmt, quality=preview_quality)
         side_by_side_b64 = _generate_side_by_side_base64(
             orig_pil, red_pil,
             triage_status=triage_stat,
             confidence=conf_score
         )
+        del orig_pil, red_pil
+        gc.collect()
+        try:
+            import ctypes
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except Exception:
+            pass
 
         with open(output_path, "rb") as out_f:
             file_bytes = out_f.read()
         file_b64_str = base64.b64encode(file_bytes).decode("utf-8")
         download_b64 = f"data:{mime_type};base64,{file_b64_str}"
+        del file_bytes
+        gc.collect()
     except Exception as e:
         _cleanup_dir(temp_dir)
         raise HTTPException(status_code=500, detail=f"Failed to render preview images: {str(e)}")
@@ -646,14 +695,14 @@ async def anonymize_prescription_preview(
         "confidence_score": conf_score,
         "triage_status": triage_stat,
         "review_reasons": reasons,
-        "original_image_base64": orig_png_b64,
-        "redacted_image_base64": red_png_b64,
+        "original_image_base64": orig_preview_b64,
+        "redacted_image_base64": red_preview_b64,
         "side_by_side_image_base64": side_by_side_b64,
         "download_file_base64": download_b64,
         "redacted_targets": report.get("redacted_targets", []),
         # Legacy backward-compatibility aliases
-        "original_image": orig_png_b64,
-        "redacted_image": red_png_b64,
+        "original_image": orig_preview_b64,
+        "redacted_image": red_preview_b64,
         "data_uri": download_b64
     })
 

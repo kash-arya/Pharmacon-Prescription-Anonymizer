@@ -361,12 +361,22 @@ def get_web_app_html() -> str:
           body: formData
         });
 
-        if (!res.ok) {
-          const err = await res.json();
-          throw new Error(err.detail || 'Anonymization error');
+        const rawText = await res.text();
+        let data = null;
+        try {
+          data = JSON.parse(rawText);
+        } catch (_) {
+          data = null;
         }
 
-        const data = await res.json();
+        if (!res.ok) {
+          const errMsg = (data && data.detail) ? data.detail : (res.status === 502 || res.status === 504 ? `Server resource limit reached (HTTP ${res.status}). The container was restarted due to memory constraints.` : `Server error (HTTP ${res.status}): ${rawText.slice(0, 160)}`);
+          throw new Error(errMsg);
+        }
+
+        if (!data) {
+          throw new Error(`Invalid response received from server (HTTP ${res.status}).`);
+        }
         lastAuditData = data;
         renderResults(data);
 
@@ -503,8 +513,15 @@ def get_web_app_html() -> str:
         });
 
         if (!res.ok) {
-          const err = await res.json();
-          throw new Error(err.detail || 'Batch anonymization failed');
+          const rawText = await res.text();
+          let err = null;
+          try {
+            err = JSON.parse(rawText);
+          } catch (_) {
+            err = null;
+          }
+          const errMsg = (err && err.detail) ? err.detail : (res.status === 502 || res.status === 504 ? `Server resource limit reached (HTTP ${res.status}). The container was restarted due to memory constraints.` : `Server error (HTTP ${res.status}): ${rawText.slice(0, 160)}`);
+          throw new Error(errMsg);
         }
 
         const totalDocs = res.headers.get('x-total-documents') || '0';
