@@ -381,12 +381,14 @@ class VectorPDFRedactor:
                 r"\b(?:M\.?B\.?B\.?S|M\.?D|M\.?S|D\.?M\.?R\.?D|D\.?N\.?B|F\.?R\.?C\.?R|Regn?\.?|MCI|NMC|MBChB|MRCGP|FRACGP|AHPRA)\b",
                 re.IGNORECASE
             )
+            doctor_prefix_re = re.compile(r"\b(?:Dr|Doctor|Herr\s+Dr|Frau\s+Dr)\.?\s+[A-Z]", re.IGNORECASE)
             for line in line_objects:
                 if line["rect"].y1 < clinical_y0:
                     l_text = line["text"]
-                    if facility_re.search(l_text) or degree_re.search(l_text):
-                        if not any(pat.search(l_text) for pat in _COMPILED_WHITELIST):
-                            add_target(line["rect"], "CLINIC_FACILITY", l_text, engine="header_facility_rule")
+                    if doctor_prefix_re.search(l_text) or degree_re.search(l_text):
+                        add_target(line["rect"], "DOCTOR_NAME", l_text, engine="header_doctor_rule")
+                    elif facility_re.search(l_text):
+                        add_target(line["rect"], "CLINIC_FACILITY", l_text, engine="header_facility_rule")
 
             # 4. Statutory National Identifiers
             for reg, cat in STATUTORY_ID_PATTERNS:
@@ -524,6 +526,7 @@ class VectorPDFRedactor:
             "jurisdiction": resolved_jur,
             "total_entities_redacted": len(targets),
             "total_redactions_applied": len(targets),
+            "extracted_text": full_doc_text,
             "redacted_targets": [t.model_dump() for t in targets],
             "confidence_score": conf["confidence_score"],
             "triage_status": conf["triage_status"],

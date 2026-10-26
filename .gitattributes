@@ -4,6 +4,9 @@
 *.html linguist-detectable=false
 *.html linguist-generated=true
 *.html linguist-vendored=true
+**/*.html linguist-detectable=false
+**/*.html linguist-generated=true
+**/*.html linguist-vendored=true
 
 # Ignore markdown reports from language classification if needed
 outputs/*.md linguist-detectable=false

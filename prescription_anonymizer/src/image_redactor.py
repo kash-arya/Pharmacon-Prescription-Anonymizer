@@ -263,7 +263,8 @@ class LocalImageRedactor:
             if category in ("PATIENT_NAME", "PATIENT_NAME_VALUE", "PATIENT_NAME_VALUE_CLAHE",
                             "PATIENT_NAME_VALUE_2D", "PATIENT_HONORIFIC", "PATIENT_HONORIFIC_ENHANCED",
                             "DOCTOR_NAME", "DOCTOR_NAME_ENHANCED") or \
-               category.startswith("PATIENT_NAME") or category.startswith("DOCTOR_NAME"):
+               (category.startswith("PATIENT_NAME") and not category.endswith("_LABEL")) or \
+               (category.startswith("DOCTOR_NAME") and not category.endswith("_LABEL")):
                 rect = expand_person_span_on_line(rect, active_lines, is_whitelisted_fn=self.is_whitelisted)
 
             if not can_redact(rect, text):
@@ -278,6 +279,9 @@ class LocalImageRedactor:
                         merged = r | rect
                         recorded_rects[idx] = merged
                         targets[idx].bbox = BoundingBox(x0=merged.x0, y0=merged.y0, x1=merged.x1, y1=merged.y1)
+                        if "LABEL" in targets[idx].category and "LABEL" not in category:
+                            targets[idx].category = category
+                            targets[idx].raw_text = f"{targets[idx].raw_text} {text}".strip()
                         return
                     if inter_a > 0.75 * min(rect.get_area(), r.get_area()):
                         return
@@ -438,20 +442,8 @@ class LocalImageRedactor:
             for match in reg.finditer(full_text):
                 match_str = match.group(0).strip()
                 if not self.is_whitelisted(match_str) and len(match_str) > 2:
-                    raw_rects = page.search_for(match_str, textpage=tp)
-                    valid_rects = [r for r in raw_rects if r.get_area() > 1.0]
-                    if not valid_rects:
-                        continue
-                    clustered_rects = []
-                    curr_box = pymupdf.Rect(valid_rects[0])
-                    for r in valid_rects[1:]:
-                        if abs((r.y0 + r.y1)/2.0 - (curr_box.y0 + curr_box.y1)/2.0) < max(15.0, curr_box.height * 0.6) and (r.x0 - curr_box.x1 < 45.0):
-                            curr_box = curr_box | r
-                        else:
-                            clustered_rects.append(curr_box)
-                            curr_box = pymupdf.Rect(r)
-                    clustered_rects.append(curr_box)
-                    for r in clustered_rects:
+                    rects = page.search_for(match_str, textpage=tp)
+                    for r in rects:
                         if cat in ("ID_TOKEN", "CITY_STATE") and is_in_clinical_zone(r):
                             continue
                         add_target(r, cat, match_str, engine="regex_scanner")
@@ -528,29 +520,18 @@ class LocalImageRedactor:
         for cand in ner_candidates:
             matched_str = cand["text"]
             if not self.is_whitelisted(matched_str) and len(matched_str) >= 3:
-                raw_rects = page.search_for(matched_str, textpage=tp)
-                valid_rects = [r for r in raw_rects if r.get_area() > 1.0]
-                clustered_rects = []
-                if valid_rects:
-                    curr_box = pymupdf.Rect(valid_rects[0])
-                    for r in valid_rects[1:]:
-                        if abs((r.y0 + r.y1)/2.0 - (curr_box.y0 + curr_box.y1)/2.0) < max(15.0, curr_box.height * 0.6) and (r.x0 - curr_box.x1 < 45.0):
-                            curr_box = curr_box | r
-                        else:
-                            clustered_rects.append(curr_box)
-                            curr_box = pymupdf.Rect(r)
-                    clustered_rects.append(curr_box)
-                for r in clustered_rects:
+                rects = page.search_for(matched_str, textpage=tp)
+                for r in rects:
                     if is_in_clinical_zone(r):
                         continue
                     add_target(r, cand["category"], matched_str, engine="spacy_ner")
-                if not clustered_rects and len(matched_str.split()) > 1:
+                if not rects and len(matched_str.split()) > 1:
                     for part in matched_str.split():
                         if len(part) >= 4 and not self.is_whitelisted(part):
-                            p_raw = page.search_for(part, textpage=tp)
-                            for pr in p_raw:
-                                if pr.get_area() > 1.0 and not is_in_clinical_zone(pr):
-                                    add_target(pr, cand["category"], part, engine="spacy_ner")
+                            for pr in page.search_for(part, textpage=tp):
+                                if is_in_clinical_zone(pr):
+                                    continue
+                                add_target(pr, cand["category"], part, engine="spacy_ner_part")
 
         # -------------------------------------------------------------------
         # 3. CLAHE Contrast-Enhanced Pass (Faint Headers, Glare & Blurry Text)
@@ -585,20 +566,8 @@ class LocalImageRedactor:
                 for match in reg.finditer(full_enh):
                     match_str = match.group(0).strip()
                     if not self.is_whitelisted(match_str) and len(match_str) > 2:
-                        raw_rects = p_enh.search_for(match_str, textpage=tp_enh)
-                        valid_rects = [r for r in raw_rects if r.get_area() > 1.0]
-                        if not valid_rects:
-                            continue
-                        clustered_rects = []
-                        curr_box = pymupdf.Rect(valid_rects[0])
-                        for r in valid_rects[1:]:
-                            if abs((r.y0 + r.y1)/2.0 - (curr_box.y0 + curr_box.y1)/2.0) < max(15.0, curr_box.height * 0.6) and (r.x0 - curr_box.x1 < 45.0):
-                                curr_box = curr_box | r
-                            else:
-                                clustered_rects.append(curr_box)
-                                curr_box = pymupdf.Rect(r)
-                        clustered_rects.append(curr_box)
-                        for r in clustered_rects:
+                        rects = p_enh.search_for(match_str, textpage=tp_enh)
+                        for r in rects:
                             if is_in_clinical_zone(r):
                                 continue
                             add_target(r, f"{cat}_ENHANCED", match_str, engine="ocr_contrast_enhanced")
@@ -627,29 +596,18 @@ class LocalImageRedactor:
             for cand in ner_candidates_enh:
                 matched_str = cand["text"]
                 if not self.is_whitelisted(matched_str) and len(matched_str) >= 3:
-                    raw_rects = p_enh.search_for(matched_str, textpage=tp_enh)
-                    valid_rects = [r for r in raw_rects if r.get_area() > 1.0]
-                    clustered_rects = []
-                    if valid_rects:
-                        curr_box = pymupdf.Rect(valid_rects[0])
-                        for r in valid_rects[1:]:
-                            if abs((r.y0 + r.y1)/2.0 - (curr_box.y0 + curr_box.y1)/2.0) < max(15.0, curr_box.height * 0.6) and (r.x0 - curr_box.x1 < 45.0):
-                                curr_box = curr_box | r
-                            else:
-                                clustered_rects.append(curr_box)
-                                curr_box = pymupdf.Rect(r)
-                        clustered_rects.append(curr_box)
-                    for r in clustered_rects:
+                    rects = p_enh.search_for(matched_str, textpage=tp_enh)
+                    for r in rects:
                         if is_in_clinical_zone(r):
                             continue
                         add_target(r, f"{cand['category']}_ENHANCED", matched_str, engine="spacy_ner_clahe")
-                    if not clustered_rects and len(matched_str.split()) > 1:
+                    if not rects and len(matched_str.split()) > 1:
                         for part in matched_str.split():
                             if len(part) >= 4 and not self.is_whitelisted(part):
-                                p_raw = p_enh.search_for(part, textpage=tp_enh)
-                                for pr in p_raw:
-                                    if pr.get_area() > 1.0 and not is_in_clinical_zone(pr):
-                                        add_target(pr, f"{cand['category']}_ENHANCED", part, engine="spacy_ner_clahe")
+                                for pr in p_enh.search_for(part, textpage=tp_enh):
+                                    if is_in_clinical_zone(pr):
+                                        continue
+                                    add_target(pr, f"{cand['category']}_ENHANCED", part, engine="spacy_ner_clahe_part")
         except Exception:
             pass
         finally:
@@ -745,8 +703,9 @@ class LocalImageRedactor:
         if is_image_input:
             with Image.open(input_path) as orig_img:
                 orig_w, orig_h = orig_img.size
-                if max(orig_w, orig_h) > 2400:
-                    scale_down = 2400.0 / max(orig_w, orig_h)
+                should_downscale = (os.environ.get("RENDER_LOW_MEMORY") == "1") and (max(orig_w, orig_h) > 3200)
+                if should_downscale:
+                    scale_down = 3200.0 / max(orig_w, orig_h)
                     new_w = max(1, int(orig_w * scale_down))
                     new_h = max(1, int(orig_h * scale_down))
                     resized_img = orig_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
@@ -841,6 +800,7 @@ class LocalImageRedactor:
                 "jurisdiction": resolved_jur,
                 "format_type": "SCANNED_RASTER_IMAGE",
                 "total_entities_redacted": len(reported_targets),
+                "extracted_text": getattr(self, "_last_extracted_text", "") or page.get_text(),
                 "redacted_targets": [t.model_dump() for t in reported_targets],
                 "confidence_score": conf["confidence_score"],
                 "triage_status": conf["triage_status"],
@@ -920,6 +880,7 @@ class LocalImageRedactor:
             "jurisdiction": resolved_jur,
             "format_type": "SCANNED_RASTER_PDF",
             "total_entities_redacted": len(all_targets),
+            "extracted_text": "\n".join(collected_ocr_text),
             "redacted_targets": [t.model_dump() for t in all_targets],
             "confidence_score": conf["confidence_score"],
             "triage_status": conf["triage_status"],

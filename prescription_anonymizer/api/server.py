@@ -18,8 +18,11 @@ import base64
 import shutil
 import zipfile
 import json
+import io
 from typing import Optional, Literal, List, Dict, Any
 from pydantic import BaseModel, Field
+from PIL import Image, ImageDraw, ImageFont
+import pymupdf
 
 from fastapi import FastAPI, File, UploadFile, Query, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -42,6 +45,17 @@ except ImportError:
     from api.web_app import get_web_app_html
 
 SUPPORTED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".webp"}
+
+MIME_MAP = {
+    ".pdf": "application/pdf",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".tiff": "image/tiff",
+    ".tif": "image/tiff",
+    ".bmp": "image/bmp"
+}
 
 
 # --- OpenAPI / Pydantic Typed Response Models ---
@@ -80,17 +94,25 @@ class AnonymizeJsonResponse(BaseModel):
 
 class PreviewResponse(BaseModel):
     status: str = Field("SUCCESS", examples=["SUCCESS"])
-    filename: str = Field(..., description="Sanitized document file name")
+    filename: str = Field(..., description="Original prescription file name")
+    anonymized_filename: str = Field(..., description="Sanitized document file name")
+    mime_type: str = Field(..., description="MIME type of sanitized document", examples=["application/pdf", "image/jpeg"])
     format_type: str = Field(..., description="Detected format category", examples=["VECTOR_DIGITAL", "SCANNED_RASTER"])
     jurisdiction: Optional[str] = Field("GLOBAL", description="Regulatory jurisdiction applied", examples=["US", "UK", "IN"])
     engine: str = Field(..., description="De-identification pipeline utilized")
     total_entities_redacted: int = Field(..., description="Total count of masked entities", examples=[14])
-    redacted_targets: List[Dict[str, Any]] = Field(..., description="List of all redacted entity descriptors")
-    original_image: str = Field(..., description="High-resolution JPEG Base64 Data URI of original page")
-    redacted_image: str = Field(..., description="High-resolution JPEG Base64 Data URI of redacted page")
-    confidence_score: Optional[float] = Field(1.0, description="Self-audit confidence score")
+    confidence_score: Optional[float] = Field(1.0, description="Self-audit confidence score (0.0 to 0.99)")
     triage_status: Optional[str] = Field("AUTO_APPROVED", description="Triage verdict: AUTO_APPROVED or NEEDS_HUMAN_REVIEW")
     review_reasons: Optional[List[str]] = Field(default_factory=list, description="Triage review reasons")
+    original_image_base64: str = Field(..., description="High-resolution PNG Base64 Data URI of original page for left pane")
+    redacted_image_base64: str = Field(..., description="High-resolution PNG Base64 Data URI of redacted page for right pane")
+    side_by_side_image_base64: str = Field(..., description="Combined side-by-side comparison JPEG Base64 Data URI")
+    download_file_base64: str = Field(..., description="Complete anonymized file payload Base64 Data URI in original format")
+    redacted_targets: List[Dict[str, Any]] = Field(default_factory=list, description="List of all redacted entity descriptors")
+    # Legacy backward-compatibility aliases
+    original_image: Optional[str] = Field(None, description="Legacy alias for original_image_base64")
+    redacted_image: Optional[str] = Field(None, description="Legacy alias for redacted_image_base64")
+    data_uri: Optional[str] = Field(None, description="Legacy alias for download_file_base64")
 
 
 class BatchFileReport(BaseModel):
@@ -163,12 +185,11 @@ def _cleanup_dir(dir_path: str):
         shutil.rmtree(dir_path, ignore_errors=True)
 
 
-def _render_page_to_base64_jpeg(file_path: str, page_num: int = 0, dpi: int = 120) -> str:
-    """Renders a single page of a PDF or image into a base64-encoded JPEG Data URI."""
+def _render_page_to_pil(file_path: str, page_num: int = 0, dpi: int = 150) -> Image.Image:
+    """Renders a single page of a PDF or loads an image into a clean RGB PIL Image."""
     _, ext = os.path.splitext(file_path)
     ext_lower = ext.lower()
     if ext_lower == ".pdf":
-        import pymupdf
         doc = pymupdf.open(file_path)
         try:
             if len(doc) == 0:
@@ -176,26 +197,99 @@ def _render_page_to_base64_jpeg(file_path: str, page_num: int = 0, dpi: int = 12
             page_idx = min(page_num, len(doc) - 1)
             page = doc[page_idx]
             pix = page.get_pixmap(dpi=dpi)
-            img_bytes = pix.tobytes("jpeg")
+            if pix.n >= 4:
+                return Image.frombytes("RGBA", [pix.width, pix.height], pix.samples).convert("RGB")
+            return Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
         finally:
             doc.close()
     else:
-        import cv2
-        img = cv2.imread(file_path)
-        if img is None:
-            raise ValueError(f"Failed to read image at {file_path}")
-        h, w = img.shape[:2]
-        max_dim = 1600
-        if max(h, w) > max_dim:
-            scale = max_dim / max(h, w)
-            img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
-        success, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        if not success:
-            raise ValueError("Failed to encode image to JPEG")
-        img_bytes = buf.tobytes()
+        try:
+            doc = pymupdf.open(file_path)
+            pix = doc[0].get_pixmap(dpi=dpi)
+            doc.close()
+            if pix.n >= 4:
+                return Image.frombytes("RGBA", [pix.width, pix.height], pix.samples).convert("RGB")
+            return Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        except Exception:
+            return Image.open(file_path).convert("RGB")
 
-    b64 = base64.b64encode(img_bytes).decode("utf-8")
+
+def _pil_to_base64_data_uri(img: Image.Image, format: str = "PNG", quality: int = 85) -> str:
+    """Encodes a PIL Image into a base64 Data URI."""
+    buf = io.BytesIO()
+    if format.upper() in ("JPG", "JPEG"):
+        img.save(buf, format="JPEG", quality=quality)
+        mime = "image/jpeg"
+    else:
+        img.save(buf, format="PNG")
+        mime = "image/png"
+    b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+    return f"data:{mime};base64,{b64}"
+
+
+def _generate_side_by_side_base64(
+    orig_img: Image.Image,
+    red_img: Image.Image,
+    triage_status: str = "AUTO_APPROVED",
+    confidence: float = 0.96
+) -> str:
+    """
+    Assembles a high-contrast side-by-side comparison JPEG with an audit banner:
+    Left: Original Prescription
+    Right: Anonymized Output with Triage Status & Confidence Badge
+    """
+    target_h = max(700, min(1200, max(orig_img.height, red_img.height)))
+    w_orig = max(1, int(orig_img.width * (target_h / orig_img.height)))
+    w_red = max(1, int(red_img.width * (target_h / red_img.height)))
+
+    orig_scaled = orig_img.resize((w_orig, target_h), Image.Resampling.LANCZOS)
+    red_scaled = red_img.resize((w_red, target_h), Image.Resampling.LANCZOS)
+
+    header_h = 55
+    divider_w = 4
+    canvas_w = w_orig + w_red + divider_w
+    canvas_h = header_h + target_h
+
+    canvas = Image.new("RGB", (canvas_w, canvas_h), (15, 23, 42))  # Slate 900
+    draw = ImageDraw.Draw(canvas)
+
+    try:
+        font = ImageFont.load_default()
+    except Exception:
+        font = None
+
+    # Left: ORIGINAL
+    draw.rectangle([0, 0, w_orig, header_h], fill=(30, 41, 59))
+    draw.text((16, 18), "ORIGINAL PRESCRIPTION (PRE-REDACTION)", fill=(203, 213, 225), font=font)
+
+    # Right: ANONYMIZED
+    rx0 = w_orig + divider_w
+    bg_right = (6, 78, 59) if triage_status == "AUTO_APPROVED" else (120, 53, 15)
+    draw.rectangle([rx0, 0, canvas_w, header_h], fill=bg_right)
+    draw.text(
+        (rx0 + 16, 18),
+        f"ANONYMIZED OUTPUT | {triage_status} ({int(confidence * 100)}% CONFIDENCE)",
+        fill=(240, 253, 244) if triage_status == "AUTO_APPROVED" else (254, 243, 199),
+        font=font
+    )
+
+    # Divider line
+    draw.rectangle([w_orig, 0, w_orig + divider_w, canvas_h], fill=(59, 130, 246))
+
+    # Composite pages
+    canvas.paste(orig_scaled, (0, header_h))
+    canvas.paste(red_scaled, (rx0, header_h))
+
+    buf = io.BytesIO()
+    canvas.save(buf, format="JPEG", quality=85)
+    b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
     return f"data:image/jpeg;base64,{b64}"
+
+
+def _render_page_to_base64_jpeg(file_path: str, page_num: int = 0, dpi: int = 120) -> str:
+    """Renders a single page of a PDF or image into a base64-encoded JPEG Data URI."""
+    img = _render_page_to_pil(file_path, page_num=page_num, dpi=dpi)
+    return _pil_to_base64_data_uri(img, format="JPEG", quality=85)
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
@@ -309,22 +403,26 @@ async def anonymize_prescription(
 
     redacted_count = report.get("total_entities_redacted", len(report.get("redacted_targets", [])))
     active_jurisdiction = report.get("jurisdiction", "GLOBAL")
+    conf_score = float(report.get("confidence_score", 0.96))
+    triage_stat = str(report.get("triage_status", "AUTO_APPROVED"))
+    reasons = report.get("review_reasons", [])
+    media_type = MIME_MAP.get(ext_lower, "application/octet-stream")
 
     # Return Mode A: Stream sanitized file binary
     if return_type == "file":
-        media_type = "application/pdf" if ext_lower == ".pdf" else f"image/{ext_lower.lstrip('.')}"
         background_tasks.add_task(_cleanup_dir, temp_dir)
         return FileResponse(
             output_path,
             media_type=media_type,
             filename=output_filename,
             headers={
+                "Content-Disposition": f'attachment; filename="{output_filename}"',
                 "X-Redacted-Count": str(redacted_count),
                 "X-Format-Type": fmt,
                 "X-Jurisdiction": active_jurisdiction,
                 "X-Engine": engine_name,
-                "X-Confidence-Score": str(report.get("confidence_score", 1.0)),
-                "X-Triage-Status": str(report.get("triage_status", "AUTO_APPROVED"))
+                "X-Confidence-Score": str(conf_score),
+                "X-Triage-Status": triage_stat
             }
         )
 
@@ -333,7 +431,6 @@ async def anonymize_prescription(
         with open(output_path, "rb") as out_f:
             out_bytes = out_f.read()
         b64_str = base64.b64encode(out_bytes).decode("utf-8")
-        media_type = "application/pdf" if ext_lower == ".pdf" else f"image/{ext_lower.lstrip('.')}"
         data_uri = f"data:{media_type};base64,{b64_str}"
     finally:
         _cleanup_dir(temp_dir)
@@ -347,28 +444,28 @@ async def anonymize_prescription(
         "total_entities_redacted": redacted_count,
         "redacted_targets": report.get("redacted_targets", []),
         "data_uri": data_uri,
-        "confidence_score": report.get("confidence_score", 1.0),
-        "triage_status": report.get("triage_status", "AUTO_APPROVED"),
-        "review_reasons": report.get("review_reasons", [])
+        "confidence_score": conf_score,
+        "triage_status": triage_stat,
+        "review_reasons": reasons
     })
 
 
-@app.post("/api/v1/anonymize/preview", response_model=PreviewResponse, tags=["Redaction"])
-async def anonymize_prescription_preview(
+@app.post("/anonymize/file", tags=["Redaction"])
+@app.post("/api/v1/anonymize/file", tags=["Redaction"])
+async def anonymize_prescription_file_download(
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(..., description="Prescription file (PDF, PNG, JPG, JPEG)"),
-    page: int = Query(0, ge=0, description="Zero-indexed page number to preview"),
+    file: UploadFile = File(..., description="Prescription file (PDF, PNG, JPG, JPEG, WEBP)"),
     jurisdiction: Literal["AUTO", "US", "UK", "AU", "EU", "IN", "GLOBAL"] = Query(
         "AUTO",
         description="Target healthcare regulatory framework (AUTO detects automatically)"
     )
 ):
     """
-    De-identifies a prescription and generates base64 JPEG preview images of page 1 (or specified page)
-    for both original and sanitized versions, suitable for side-by-side visual inspection in frontend UIs.
+    De-identifies a prescription and streams back the sanitized file in the exact same
+    file extension and MIME type as uploaded, with Content-Disposition attachment header.
     """
     filename = file.filename or "prescription.pdf"
-    _, ext = os.path.splitext(filename)
+    stem, ext = os.path.splitext(filename)
     ext_lower = ext.lower()
 
     if ext_lower not in SUPPORTED_EXTENSIONS:
@@ -378,11 +475,11 @@ async def anonymize_prescription_preview(
         )
 
     req_id = uuid.uuid4().hex
-    temp_dir = f"/tmp/pharmacon_preview_{req_id}"
+    temp_dir = f"/tmp/pharmacon_file_{req_id}"
     os.makedirs(temp_dir, exist_ok=True)
 
     input_path = os.path.join(temp_dir, f"input_{filename}")
-    output_filename = f"{os.path.splitext(filename)[0]}_anonymized{ext_lower}"
+    output_filename = f"{stem}_anonymized{ext_lower}"
     output_path = os.path.join(temp_dir, output_filename)
 
     try:
@@ -418,10 +515,119 @@ async def anonymize_prescription_preview(
 
     redacted_count = report.get("total_entities_redacted", len(report.get("redacted_targets", [])))
     active_jurisdiction = report.get("jurisdiction", "GLOBAL")
+    conf_score = float(report.get("confidence_score", 0.96))
+    triage_stat = str(report.get("triage_status", "AUTO_APPROVED"))
+    media_type = MIME_MAP.get(ext_lower, "application/octet-stream")
+
+    background_tasks.add_task(_cleanup_dir, temp_dir)
+    return FileResponse(
+        output_path,
+        media_type=media_type,
+        filename=output_filename,
+        headers={
+            "Content-Disposition": f'attachment; filename="{output_filename}"',
+            "X-Redacted-Count": str(redacted_count),
+            "X-Format-Type": fmt,
+            "X-Jurisdiction": active_jurisdiction,
+            "X-Engine": engine_name,
+            "X-Confidence-Score": str(conf_score),
+            "X-Triage-Status": triage_stat
+        }
+    )
+
+
+@app.post("/anonymize/preview", response_model=PreviewResponse, tags=["Redaction"])
+@app.post("/api/v1/anonymize/preview", response_model=PreviewResponse, tags=["Redaction"])
+async def anonymize_prescription_preview(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(..., description="Prescription file (PDF, PNG, JPG, JPEG, WEBP)"),
+    page: int = Query(0, ge=0, description="Zero-indexed page number to preview"),
+    jurisdiction: Literal["AUTO", "US", "UK", "AU", "EU", "IN", "GLOBAL"] = Query(
+        "AUTO",
+        description="Target healthcare regulatory framework (AUTO detects automatically)"
+    )
+):
+    """
+    De-identifies a prescription and generates a unified preview payload for the Vercel frontend:
+    - original_image_base64: PNG Base64 Data URI of original document for the Left pane
+    - redacted_image_base64: PNG Base64 Data URI of redacted document for the Right pane
+    - side_by_side_image_base64: JPEG Base64 Data URI with comparative audit banner
+    - download_file_base64: Exact anonymized binary in original format (.pdf/.jpg/.png/.webp)
+      allowing one-click instant client-side downloads without a second request
+    - Deterministic audit confidence score, triage verdict, and entity count.
+    """
+    filename = file.filename or "prescription.pdf"
+    stem, ext = os.path.splitext(filename)
+    ext_lower = ext.lower()
+
+    if ext_lower not in SUPPORTED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file format '{ext_lower}'. Supported extensions: {sorted(list(SUPPORTED_EXTENSIONS))}"
+        )
+
+    req_id = uuid.uuid4().hex
+    temp_dir = f"/tmp/pharmacon_preview_{req_id}"
+    os.makedirs(temp_dir, exist_ok=True)
+
+    input_path = os.path.join(temp_dir, f"input_{filename}")
+    output_filename = f"{stem}_anonymized{ext_lower}"
+    output_path = os.path.join(temp_dir, output_filename)
 
     try:
-        orig_b64 = _render_page_to_base64_jpeg(input_path, page_num=page)
-        red_b64 = _render_page_to_base64_jpeg(output_path, page_num=page)
+        content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty (0 bytes).")
+        with open(input_path, "wb") as f:
+            f.write(content)
+    except HTTPException:
+        _cleanup_dir(temp_dir)
+        raise
+    except Exception as e:
+        _cleanup_dir(temp_dir)
+        raise HTTPException(status_code=500, detail=f"Failed to read uploaded file: {str(e)}")
+
+    try:
+        structure = inspect_pdf_structure(input_path)
+        fmt = structure["format_type"]
+    except Exception as e:
+        _cleanup_dir(temp_dir)
+        raise HTTPException(status_code=422, detail=f"Failed to parse document structure: {str(e)}")
+
+    try:
+        if fmt == "VECTOR_DIGITAL":
+            engine_name = "Native Vector Stream Redactor (PyMuPDF)"
+            report = vector_engine.redact(input_path, output_path, jurisdiction=jurisdiction)
+        else:
+            engine_name = "Scanned Raster Image Redactor (Local OCR Anchor Engine)"
+            report = image_engine.redact(input_path, output_path, jurisdiction=jurisdiction)
+    except Exception as e:
+        _cleanup_dir(temp_dir)
+        raise HTTPException(status_code=500, detail=f"Redaction execution error: {str(e)}")
+
+    redacted_count = report.get("total_entities_redacted", len(report.get("redacted_targets", [])))
+    active_jurisdiction = report.get("jurisdiction", "GLOBAL")
+    conf_score = float(report.get("confidence_score", 0.96))
+    triage_stat = str(report.get("triage_status", "AUTO_APPROVED"))
+    reasons = report.get("review_reasons", [])
+    mime_type = MIME_MAP.get(ext_lower, "application/octet-stream")
+
+    try:
+        orig_pil = _render_page_to_pil(input_path, page_num=page, dpi=150)
+        red_pil = _render_page_to_pil(output_path, page_num=page, dpi=150)
+
+        orig_png_b64 = _pil_to_base64_data_uri(orig_pil, format="PNG")
+        red_png_b64 = _pil_to_base64_data_uri(red_pil, format="PNG")
+        side_by_side_b64 = _generate_side_by_side_base64(
+            orig_pil, red_pil,
+            triage_status=triage_stat,
+            confidence=conf_score
+        )
+
+        with open(output_path, "rb") as out_f:
+            file_bytes = out_f.read()
+        file_b64_str = base64.b64encode(file_bytes).decode("utf-8")
+        download_b64 = f"data:{mime_type};base64,{file_b64_str}"
     except Exception as e:
         _cleanup_dir(temp_dir)
         raise HTTPException(status_code=500, detail=f"Failed to render preview images: {str(e)}")
@@ -430,17 +636,25 @@ async def anonymize_prescription_preview(
 
     return JSONResponse(content={
         "status": "SUCCESS",
-        "filename": output_filename,
+        "filename": filename,
+        "anonymized_filename": output_filename,
+        "mime_type": mime_type,
         "format_type": fmt,
         "jurisdiction": active_jurisdiction,
         "engine": engine_name,
         "total_entities_redacted": redacted_count,
+        "confidence_score": conf_score,
+        "triage_status": triage_stat,
+        "review_reasons": reasons,
+        "original_image_base64": orig_png_b64,
+        "redacted_image_base64": red_png_b64,
+        "side_by_side_image_base64": side_by_side_b64,
+        "download_file_base64": download_b64,
         "redacted_targets": report.get("redacted_targets", []),
-        "original_image": orig_b64,
-        "redacted_image": red_b64,
-        "confidence_score": report.get("confidence_score", 1.0),
-        "triage_status": report.get("triage_status", "AUTO_APPROVED"),
-        "review_reasons": report.get("review_reasons", [])
+        # Legacy backward-compatibility aliases
+        "original_image": orig_png_b64,
+        "redacted_image": red_png_b64,
+        "data_uri": download_b64
     })
 
 
