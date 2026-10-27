@@ -25,18 +25,14 @@ COPY . .
 
 # Environment setup
 ENV PYTHONUNBUFFERED=1 \
-    PORT=7860 \
-    RENDER_LOW_MEMORY=0 \
+    PORT=10000 \
+    RENDER_LOW_MEMORY=1 \
     MALLOC_TRIM_THRESHOLD_=65536 \
     MALLOC_MMAP_THRESHOLD_=65536 \
     OMP_NUM_THREADS=1 \
     OPENBLAS_NUM_THREADS=1 \
     TESSDATA_PREFIX=/app/data/tessdata
 
-EXPOSE 7860
+EXPOSE 10000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD python3 -c "import urllib.request, os; urllib.request.urlopen('http://localhost:' + os.environ.get('PORT', '7860') + '/health')" || exit 1
-
-CMD ["sh", "-c", "uvicorn api.server:app --host 0.0.0.0 --port ${PORT:-7860} --workers 1"]
+CMD ["sh", "-c", "uvicorn api.server:app --host 0.0.0.0 --port ${PORT:-10000} --workers 1"]
