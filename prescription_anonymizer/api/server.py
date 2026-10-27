@@ -205,6 +205,60 @@ def _purge_system_memory():
         image_engine._last_extracted_text = ""
 
 
+def _run_isolated_redaction_task(fmt: str, input_path: str, output_path: str, jurisdiction: str, temp_dir: str):
+    """
+    Executes redaction pipeline. When RENDER_LOW_MEMORY=1, executes inside a forked child
+    subprocess that writes results to a temp JSON file and terminates via os._exit(0),
+    guaranteeing 100% C++ heap memory reclamation by the Linux kernel.
+    """
+    is_low_mem = os.environ.get("RENDER_LOW_MEMORY") == "1"
+    if not is_low_mem:
+        if fmt == "VECTOR_DIGITAL":
+            return "Native Vector Stream Redactor (PyMuPDF)", vector_engine.redact(input_path, output_path, jurisdiction=jurisdiction)
+        else:
+            return "Scanned Raster Image Redactor (Local OCR Anchor Engine)", image_engine.redact(input_path, output_path, jurisdiction=jurisdiction)
+
+    import multiprocessing
+    ctx = multiprocessing.get_context("fork")
+    meta_json_path = os.path.join(temp_dir, "_redaction_isolated_result.json")
+
+    def _child():
+        try:
+            if fmt == "VECTOR_DIGITAL":
+                e_name = "Native Vector Stream Redactor (PyMuPDF)"
+                rep = vector_engine.redact(input_path, output_path, jurisdiction=jurisdiction)
+            else:
+                e_name = "Scanned Raster Image Redactor (Local OCR Anchor Engine)"
+                rep = image_engine.redact(input_path, output_path, jurisdiction=jurisdiction)
+            with open(meta_json_path, "w", encoding="utf-8") as f:
+                json.dump({"success": True, "engine": e_name, "report": rep}, f)
+        except Exception as ex:
+            with open(meta_json_path, "w", encoding="utf-8") as f:
+                json.dump({"success": False, "error": str(ex)}, f)
+        finally:
+            os._exit(0)
+
+    p = ctx.Process(target=_child)
+    p.start()
+    p.join(timeout=180)
+    if p.is_alive():
+        p.kill()
+        p.join()
+
+    _purge_system_memory()
+
+    if not os.path.exists(meta_json_path):
+        raise RuntimeError("Isolated redaction worker exited unexpectedly without writing results.")
+
+    with open(meta_json_path, "r", encoding="utf-8") as f:
+        meta = json.load(f)
+
+    if not meta.get("success"):
+        raise RuntimeError(f"Redaction execution error in isolated worker: {meta.get('error')}")
+
+    return meta["engine"], meta["report"]
+
+
 def _render_page_to_pil(file_path: str, page_num: int = 0, dpi: int = 150, max_height: Optional[int] = None) -> Image.Image:
     """Renders a single page of a PDF or loads an image into a clean RGB PIL Image."""
     _, ext = os.path.splitext(file_path)
@@ -437,12 +491,7 @@ async def anonymize_prescription(
 
     # Stage 2: Redaction Routing & Execution
     try:
-        if fmt == "VECTOR_DIGITAL":
-            engine_name = "Native Vector Stream Redactor (PyMuPDF)"
-            report = vector_engine.redact(input_path, output_path, jurisdiction=jurisdiction)
-        else:
-            engine_name = "Scanned Raster Image Redactor (Local OCR Anchor Engine)"
-            report = image_engine.redact(input_path, output_path, jurisdiction=jurisdiction)
+        engine_name, report = _run_isolated_redaction_task(fmt, input_path, output_path, jurisdiction, temp_dir)
     except Exception as e:
         _cleanup_dir(temp_dir)
         raise HTTPException(status_code=500, detail=f"Redaction execution error: {str(e)}")
@@ -558,12 +607,7 @@ async def anonymize_prescription_file_download(
         raise HTTPException(status_code=422, detail=f"Failed to parse document structure: {str(e)}")
 
     try:
-        if fmt == "VECTOR_DIGITAL":
-            engine_name = "Native Vector Stream Redactor (PyMuPDF)"
-            report = vector_engine.redact(input_path, output_path, jurisdiction=jurisdiction)
-        else:
-            engine_name = "Scanned Raster Image Redactor (Local OCR Anchor Engine)"
-            report = image_engine.redact(input_path, output_path, jurisdiction=jurisdiction)
+        engine_name, report = _run_isolated_redaction_task(fmt, input_path, output_path, jurisdiction, temp_dir)
     except Exception as e:
         _cleanup_dir(temp_dir)
         raise HTTPException(status_code=500, detail=f"Redaction execution error: {str(e)}")
@@ -658,12 +702,7 @@ async def anonymize_prescription_preview(
         raise HTTPException(status_code=422, detail=f"Failed to parse document structure: {str(e)}")
 
     try:
-        if fmt == "VECTOR_DIGITAL":
-            engine_name = "Native Vector Stream Redactor (PyMuPDF)"
-            report = vector_engine.redact(input_path, output_path, jurisdiction=jurisdiction)
-        else:
-            engine_name = "Scanned Raster Image Redactor (Local OCR Anchor Engine)"
-            report = image_engine.redact(input_path, output_path, jurisdiction=jurisdiction)
+        engine_name, report = _run_isolated_redaction_task(fmt, input_path, output_path, jurisdiction, temp_dir)
     except Exception as e:
         _cleanup_dir(temp_dir)
         raise HTTPException(status_code=500, detail=f"Redaction execution error: {str(e)}")

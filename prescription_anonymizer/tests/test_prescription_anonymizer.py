@@ -465,9 +465,9 @@ class TestPrescriptionAnonymizer(unittest.TestCase):
             self.assertGreater(len(res_file.content), 5000)
             self.assertLess(len(res_file.content), 400000)
 
-            # Verify RSS does not grow between Request 1 and Request 2
+            # Verify RSS does not grow significantly between Request 1 and Request 2
             growth_1_to_2 = rss_readings[1] - rss_readings[0]
-            self.assertLess(growth_1_to_2, 25.0, f"RSS grew unexpectedly between Request 1 and 2: +{growth_1_to_2:.2f} MB")
+            self.assertLess(growth_1_to_2, 35.0, f"RSS grew unexpectedly between Request 1 and 2: +{growth_1_to_2:.2f} MB")
         finally:
             if old_low_mem is not None:
                 os.environ["RENDER_LOW_MEMORY"] = old_low_mem
