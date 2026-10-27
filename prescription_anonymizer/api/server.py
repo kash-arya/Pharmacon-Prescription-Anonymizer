@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 from PIL import Image, ImageDraw, ImageFont
 import pymupdf
 
-from fastapi import FastAPI, File, UploadFile, Query, HTTPException, BackgroundTasks
+from fastapi import FastAPI, File, UploadFile, Query, HTTPException, BackgroundTasks, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 
@@ -185,6 +185,24 @@ def _cleanup_dir(dir_path: str):
     """Safely removes temporary directories and all their contents."""
     if dir_path and os.path.exists(dir_path):
         shutil.rmtree(dir_path, ignore_errors=True)
+
+
+def _purge_system_memory():
+    """Purges PyMuPDF global cache, trims malloc arenas, and clears engine state."""
+    try:
+        pymupdf.TOOLS.store_shrink(100)
+    except Exception:
+        pass
+    gc.collect()
+    try:
+        import ctypes
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
+    if os.environ.get("RENDER_LOW_MEMORY") == "1":
+        image_engine._last_extracted_words = []
+        image_engine._last_whitelisted_rects = []
+        image_engine._last_extracted_text = ""
 
 
 def _render_page_to_pil(file_path: str, page_num: int = 0, dpi: int = 150, max_height: Optional[int] = None) -> Image.Image:
@@ -346,6 +364,7 @@ async def api_info():
 @app.get("/health", response_model=HealthResponse, tags=["System"])
 async def health_check():
     """Health and readiness probe."""
+    _purge_system_memory()
     tess_path = resolve_tessdata_path()
     return {
         "status": "ok",
@@ -437,11 +456,17 @@ async def anonymize_prescription(
 
     # Return Mode A: Stream sanitized file binary
     if return_type == "file":
-        background_tasks.add_task(_cleanup_dir, temp_dir)
-        return FileResponse(
-            output_path,
+        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+            _cleanup_dir(temp_dir)
+            _purge_system_memory()
+            raise HTTPException(status_code=500, detail="Sanitized file output was not generated or is empty.")
+        with open(output_path, "rb") as out_f:
+            file_bytes = out_f.read()
+        _cleanup_dir(temp_dir)
+        _purge_system_memory()
+        return Response(
+            content=file_bytes,
             media_type=media_type,
-            filename=output_filename,
             headers={
                 "Content-Disposition": f'attachment; filename="{output_filename}"',
                 "X-Redacted-Count": str(redacted_count),
@@ -455,12 +480,15 @@ async def anonymize_prescription(
 
     # Return Mode B: Return JSON metadata with embedded Base64 output
     try:
+        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+            raise HTTPException(status_code=500, detail="Sanitized file output was not generated or is empty.")
         with open(output_path, "rb") as out_f:
             out_bytes = out_f.read()
         b64_str = base64.b64encode(out_bytes).decode("utf-8")
         data_uri = f"data:{media_type};base64,{b64_str}"
     finally:
         _cleanup_dir(temp_dir)
+        _purge_system_memory()
 
     return JSONResponse(content={
         "status": "SUCCESS",
@@ -546,11 +574,19 @@ async def anonymize_prescription_file_download(
     triage_stat = str(report.get("triage_status", "AUTO_APPROVED"))
     media_type = MIME_MAP.get(ext_lower, "application/octet-stream")
 
-    background_tasks.add_task(_cleanup_dir, temp_dir)
-    return FileResponse(
-        output_path,
+    if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+        _cleanup_dir(temp_dir)
+        _purge_system_memory()
+        raise HTTPException(status_code=500, detail="Sanitized file output was not generated or is empty.")
+
+    with open(output_path, "rb") as out_f:
+        file_bytes = out_f.read()
+    _cleanup_dir(temp_dir)
+    _purge_system_memory()
+
+    return Response(
+        content=file_bytes,
         media_type=media_type,
-        filename=output_filename,
         headers={
             "Content-Disposition": f'attachment; filename="{output_filename}"',
             "X-Redacted-Count": str(redacted_count),
@@ -671,6 +707,8 @@ async def anonymize_prescription_preview(
         except Exception:
             pass
 
+        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+            raise RuntimeError(f"Redacted output file is missing or empty at {output_path}")
         with open(output_path, "rb") as out_f:
             file_bytes = out_f.read()
         file_b64_str = base64.b64encode(file_bytes).decode("utf-8")
@@ -679,9 +717,11 @@ async def anonymize_prescription_preview(
         gc.collect()
     except Exception as e:
         _cleanup_dir(temp_dir)
+        _purge_system_memory()
         raise HTTPException(status_code=500, detail=f"Failed to render preview images: {str(e)}")
     finally:
         _cleanup_dir(temp_dir)
+        _purge_system_memory()
 
     return JSONResponse(content={
         "status": "SUCCESS",
@@ -846,12 +886,21 @@ async def anonymize_batch_archive(
                 arcname = os.path.relpath(file_to_zip, out_redact_dir)
                 out_zf.write(file_to_zip, arcname)
 
-    background_tasks.add_task(_cleanup_dir, temp_dir)
-    return FileResponse(
-        archive_output_path,
+    if not os.path.exists(archive_output_path) or os.path.getsize(archive_output_path) == 0:
+        _cleanup_dir(temp_dir)
+        _purge_system_memory()
+        raise HTTPException(status_code=500, detail="Batch output archive could not be generated.")
+
+    with open(archive_output_path, "rb") as azf:
+        zip_bytes = azf.read()
+    _cleanup_dir(temp_dir)
+    _purge_system_memory()
+
+    return Response(
+        content=zip_bytes,
         media_type="application/zip",
-        filename=os.path.basename(archive_output_path),
         headers={
+            "Content-Disposition": f'attachment; filename="{os.path.basename(archive_output_path)}"',
             "X-Total-Documents": str(len(found_files)),
             "X-Total-Entities-Redacted": str(total_redactions)
         }

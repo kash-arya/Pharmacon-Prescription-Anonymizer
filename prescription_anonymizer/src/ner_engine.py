@@ -23,10 +23,10 @@ class LocalNEREngine:
             cls._instance = super().__new__(cls)
             try:
                 import en_core_web_sm
-                cls._nlp_en = en_core_web_sm.load()
+                cls._nlp_en = en_core_web_sm.load(exclude=["parser", "lemmatizer", "attribute_ruler", "tagger"])
             except Exception:
                 try:
-                    cls._nlp_en = spacy.load("en_core_web_sm")
+                    cls._nlp_en = spacy.load("en_core_web_sm", exclude=["parser", "lemmatizer", "attribute_ruler", "tagger"])
                 except Exception:
                     cls._nlp_en = None
 

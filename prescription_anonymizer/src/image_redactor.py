@@ -173,7 +173,7 @@ class LocalImageRedactor:
         max_pt = max(page.rect.width, page.rect.height)
         is_low_mem = os.environ.get("RENDER_LOW_MEMORY") == "1"
         if is_low_mem:
-            effective_dpi = 200 if max_pt < 550 else 120
+            effective_dpi = 160 if max_pt < 550 else 125
         else:
             if max_pt < 550:
                 effective_dpi = 300
@@ -301,7 +301,7 @@ class LocalImageRedactor:
 
         # Render page pixmap once for visual analysis (barcodes, QR, stamps, signatures)
         if is_low_mem:
-            vis_dpi = 96
+            vis_dpi = 72
         else:
             vis_dpi = 72 if max_pt > 2000 else 150
         pix = page.get_pixmap(dpi=vis_dpi)
@@ -668,18 +668,29 @@ class LocalImageRedactor:
         # 4. Zero-keyword Visual Grounder (chromatic stamps and handwritten signatures)
         # -------------------------------------------------------------------
         if self.enable_visual_grounder and self.grounder is not None:
-            try:
-                visual_targets = self.grounder.detect_visual_pii_from_bgr(page_bgr, page_num=page_num)
-                for vt in visual_targets:
-                    scaled_rect = pymupdf.Rect(
-                        vt.bbox.x0 * scale_px_x,
-                        vt.bbox.y0 * scale_px_y,
-                        vt.bbox.x1 * scale_px_x,
-                        vt.bbox.y1 * scale_px_y
-                    )
-                    add_target(scaled_rect, vt.category, vt.raw_text, engine=vt.engine)
-            except Exception:
-                pass
+            skip_grounder = False
+            if is_low_mem and len(words) >= 20:
+                has_sig_or_doc = any(
+                    t.category in ("DOCTOR_NAME", "DOCTOR_NAME_VALUE", "HEADER_PROVIDER", "SIGNATURE", "DOCTOR_STAMP") or
+                    t.category.startswith("DOCTOR") or t.category.startswith("SIGNATURE") or t.category.startswith("HEADER_PROVIDER")
+                    for t in targets
+                )
+                if has_sig_or_doc:
+                    skip_grounder = True
+
+            if not skip_grounder:
+                try:
+                    visual_targets = self.grounder.detect_visual_pii_from_bgr(page_bgr, page_num=page_num)
+                    for vt in visual_targets:
+                        scaled_rect = pymupdf.Rect(
+                            vt.bbox.x0 * scale_px_x,
+                            vt.bbox.y0 * scale_px_y,
+                            vt.bbox.x1 * scale_px_x,
+                            vt.bbox.y1 * scale_px_y
+                        )
+                        add_target(scaled_rect, vt.category, vt.raw_text, engine=vt.engine)
+                except Exception:
+                    pass
 
         try:
             del page_bgr, pix, arr
@@ -725,9 +736,9 @@ class LocalImageRedactor:
             is_low_mem = os.environ.get("RENDER_LOW_MEMORY") == "1"
             with Image.open(input_path) as orig_img:
                 orig_w, orig_h = orig_img.size
-                if is_low_mem and max(orig_w, orig_h) > 1200:
-                    orig_img.draft("RGB", (1200, 1200))
-                    scale_down = 1200.0 / max(orig_w, orig_h)
+                if is_low_mem and max(orig_w, orig_h) > 1350:
+                    orig_img.draft("RGB", (1350, 1350))
+                    scale_down = 1350.0 / max(orig_w, orig_h)
                     new_w = max(1, int(orig_w * scale_down))
                     new_h = max(1, int(orig_h * scale_down))
                     resized_img = orig_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
@@ -794,7 +805,30 @@ class LocalImageRedactor:
                 pix.save(output_path)
                 del pix
             else:
-                doc.save(output_path, garbage=4, deflate=True)
+                out_doc = pymupdf.open()
+                render_dpi = 130 if is_low_mem else 150
+                pix = page.get_pixmap(dpi=render_dpi)
+                jpg_bytes = pix.tobytes("jpeg", jpg_quality=85)
+                new_p = out_doc.new_page(width=page.rect.width, height=page.rect.height)
+                new_p.insert_image(page.rect, stream=jpg_bytes)
+                del pix, jpg_bytes
+                out_doc.set_metadata({
+                    "title": "Redacted Medical Document",
+                    "author": "Pharmacon Anonymizer",
+                    "subject": "De-identified Prescription",
+                    "keywords": "anonymized, de-identified",
+                    "creator": "Pharmacon Anonymizer Engine",
+                    "producer": "PyMuPDF",
+                    "creationDate": "",
+                    "modDate": ""
+                })
+                out_doc.save(output_path, garbage=4, deflate=True)
+                out_doc.close()
+                del out_doc
+
+            final_extracted_text = getattr(self, "_last_extracted_text", "")
+            if not final_extracted_text and not doc.is_closed:
+                final_extracted_text = page.get_text()
 
             doc.close()
             gc.collect()
@@ -817,9 +851,24 @@ class LocalImageRedactor:
 
             conf = ForensicAuditor.evaluate_redaction_confidence(
                 report={"redacted_targets": [t.model_dump() for t in reported_targets]},
-                extracted_text=getattr(self, "_last_extracted_text", "") or page.get_text(),
+                extracted_text=final_extracted_text,
                 is_raster=True
             )
+
+            if is_low_mem:
+                self._last_extracted_words = []
+                self._last_whitelisted_rects = []
+                self._last_extracted_text = ""
+            try:
+                pymupdf.TOOLS.store_shrink(100)
+            except Exception:
+                pass
+            gc.collect()
+            try:
+                import ctypes
+                ctypes.CDLL("libc.so.6").malloc_trim(0)
+            except Exception:
+                pass
 
             return {
                 "input_file": input_path,
@@ -827,7 +876,7 @@ class LocalImageRedactor:
                 "jurisdiction": resolved_jur,
                 "format_type": "SCANNED_RASTER_IMAGE",
                 "total_entities_redacted": len(reported_targets),
-                "extracted_text": getattr(self, "_last_extracted_text", "") or page.get_text(),
+                "extracted_text": final_extracted_text,
                 "redacted_targets": [t.model_dump() for t in reported_targets],
                 "confidence_score": conf["confidence_score"],
                 "triage_status": conf["triage_status"],
@@ -880,26 +929,36 @@ class LocalImageRedactor:
         full_doc_text = " ".join(collected_ocr_text) if collected_ocr_text else " ".join(p.get_text() for p in doc)
         resolved_jur = JurisdictionDetector.resolve_jurisdiction(full_doc_text, jurisdiction)
 
-        # Wipe metadata to eliminate digital trace leakage
-        doc.set_metadata({
-            "title": "Redacted Medical Document",
-            "author": "Pharmacon Anonymizer",
-            "subject": "De-identified Prescription",
-            "keywords": "anonymized, de-identified",
-            "creator": "Pharmacon Anonymizer Engine",
-            "producer": "PyMuPDF",
-            "creationDate": "",
-            "modDate": ""
-        })
-
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         if out_ext_lower in self.IMAGE_EXTENSIONS:
             pix = doc[0].get_pixmap(dpi=self.dpi)
             pix.save(output_path)
+            del pix
+            doc.close()
         else:
-            doc.save(output_path, garbage=4, deflate=True)
+            out_doc = pymupdf.open()
+            render_dpi = 130 if is_low_mem else 150
+            for page in doc:
+                pix = page.get_pixmap(dpi=render_dpi)
+                jpg_bytes = pix.tobytes("jpeg", jpg_quality=85)
+                new_p = out_doc.new_page(width=page.rect.width, height=page.rect.height)
+                new_p.insert_image(page.rect, stream=jpg_bytes)
+                del pix, jpg_bytes
+            out_doc.set_metadata({
+                "title": "Redacted Medical Document",
+                "author": "Pharmacon Anonymizer",
+                "subject": "De-identified Prescription",
+                "keywords": "anonymized, de-identified",
+                "creator": "Pharmacon Anonymizer Engine",
+                "producer": "PyMuPDF",
+                "creationDate": "",
+                "modDate": ""
+            })
+            out_doc.save(output_path, garbage=4, deflate=True)
+            out_doc.close()
+            doc.close()
+            del out_doc
 
-        doc.close()
         gc.collect()
 
         conf = ForensicAuditor.evaluate_redaction_confidence(
@@ -907,6 +966,21 @@ class LocalImageRedactor:
             extracted_text="\n".join(collected_ocr_text),
             is_raster=True
         )
+
+        if is_low_mem:
+            self._last_extracted_words = []
+            self._last_whitelisted_rects = []
+            self._last_extracted_text = ""
+        try:
+            pymupdf.TOOLS.store_shrink(100)
+        except Exception:
+            pass
+        gc.collect()
+        try:
+            import ctypes
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except Exception:
+            pass
 
         return {
             "input_file": input_path,
