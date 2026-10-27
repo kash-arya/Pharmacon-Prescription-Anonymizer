@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Forensic Anti-Leak and Verification Engine (Phase 1).
 
@@ -15,7 +17,7 @@ Provides forensic security auditing for redacted medical documents:
    - Computes SHA-256 document fingerprint and generates an immutable Audit Certificate.
 """
 
-from typing import Dict, Any, List, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 import hashlib
 import os
 import re
