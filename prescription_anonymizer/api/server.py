@@ -22,7 +22,7 @@ import json
 import io
 import gc
 import ctypes
-from typing import Any, Dict, List, Optional, Tuple, Union, Literal
+from typing import Any, Dict, List, Optional, Set, Tuple, Union, Literal
 from pydantic import BaseModel, Field
 from PIL import Image, ImageDraw, ImageFont
 import pymupdf
@@ -167,9 +167,25 @@ app.add_middleware(
     ]
 )
 
-# Shared redactor singletons to avoid repeated instantiation overhead
-vector_engine = VectorPDFRedactor()
-image_engine = LocalImageRedactor()
+# Shared redactor singletons (lazily initialized on first processing request)
+_vector_engine: Optional[VectorPDFRedactor] = None
+_image_engine: Optional[LocalImageRedactor] = None
+
+
+def get_vector_redactor() -> VectorPDFRedactor:
+    """Lazily instantiates and returns the VectorPDFRedactor singleton."""
+    global _vector_engine
+    if _vector_engine is None:
+        _vector_engine = VectorPDFRedactor()
+    return _vector_engine
+
+
+def get_redactor() -> LocalImageRedactor:
+    """Lazily instantiates and returns the LocalImageRedactor singleton."""
+    global _image_engine
+    if _image_engine is None:
+        _image_engine = LocalImageRedactor()
+    return _image_engine
 
 
 def _cleanup_files(*paths: str):
@@ -201,17 +217,18 @@ def _purge_system_memory():
     except Exception:
         pass
     if os.environ.get("RENDER_LOW_MEMORY") == "1":
-        image_engine._last_extracted_words = []
-        image_engine._last_whitelisted_rects = []
-        image_engine._last_extracted_text = ""
+        if _image_engine is not None:
+            _image_engine._last_extracted_words = []
+            _image_engine._last_whitelisted_rects = []
+            _image_engine._last_extracted_text = ""
 
 
 def _run_redaction(fmt: str, input_path: str, output_path: str, jurisdiction: str) -> tuple[str, Dict[str, Any]]:
     """Executes redaction pipeline directly in-process (single process)."""
     if fmt == "VECTOR_DIGITAL":
-        return "Native Vector Stream Redactor (PyMuPDF)", vector_engine.redact(input_path, output_path, jurisdiction=jurisdiction)
+        return "Native Vector Stream Redactor (PyMuPDF)", get_vector_redactor().redact(input_path, output_path, jurisdiction=jurisdiction)
     else:
-        return "Scanned Raster Image Redactor (Local OCR Anchor Engine)", image_engine.redact(input_path, output_path, jurisdiction=jurisdiction)
+        return "Scanned Raster Image Redactor (Local OCR Anchor Engine)", get_redactor().redact(input_path, output_path, jurisdiction=jurisdiction)
 
 
 def _render_page_to_pil(file_path: str, page_num: int = 0, dpi: int = 150, max_height: Optional[int] = None) -> Image.Image:

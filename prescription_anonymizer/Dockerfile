@@ -18,7 +18,6 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 RUN python -m spacy download en_core_web_sm
-RUN python -m spacy download xx_ent_wiki_sm
 
 # Copy application source code and datasets
 COPY . .
@@ -37,6 +36,4 @@ ENV PYTHONUNBUFFERED=1 \
     NUMEXPR_NUM_THREADS=1 \
     TESSDATA_PREFIX=/app/data/tessdata
 
-EXPOSE 10000
-
-CMD ["sh", "-c", "uvicorn api.server:app --host 0.0.0.0 --port ${PORT:-10000} --workers 1"]
+CMD ["uvicorn", "api.server:app", "--host", "0.0.0.0", "--port", "10000", "--workers", "1"]
