@@ -407,6 +407,73 @@ class TestPrescriptionAnonymizer(unittest.TestCase):
         ink = detect_handwritten_fill_in_zone(blank_bgr, zone, 1.0, 1.0)
         self.assertIsNone(ink)
 
+    def test_consecutive_uploads_memory_and_download_integrity(self):
+        """
+        Verifies that consecutive uploads under RENDER_LOW_MEMORY=1 do not cause RSS memory leak,
+        and that download_file_base64 and /anonymize/file produce non-empty valid binary outputs.
+        """
+        import base64
+        from fastapi.testclient import TestClient
+        from api.server import app
+
+        def get_current_rss_mb():
+            try:
+                with open("/proc/self/status") as f:
+                    for line in f:
+                        if line.startswith("VmRSS:"):
+                            return int(line.split()[1]) / 1024.0
+            except Exception:
+                pass
+            import resource
+            return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+
+        old_low_mem = os.environ.get("RENDER_LOW_MEMORY")
+        os.environ["RENDER_LOW_MEMORY"] = "1"
+        try:
+            client = TestClient(app)
+            phone_dir = os.path.join(self.repo_dir, "data", "real_phone_prescriptions")
+            files_to_test = [
+                ("Aryan March 26.jpg", os.path.join(phone_dir, "Aryan March 26.jpg"), "image/jpeg"),
+                ("Aryan Sept 24.jpg", os.path.join(phone_dir, "Aryan Sept 24.jpg"), "image/jpeg"),
+                ("sample_prescription_1.pdf", self.scanned_pdf_1, "application/pdf")
+            ]
+
+            rss_readings = []
+            for name, path, mime in files_to_test:
+                with open(path, "rb") as f:
+                    content = f.read()
+                res = client.post("/api/v1/anonymize/preview", files={"file": (name, content, mime)})
+                self.assertEqual(res.status_code, 200, f"Preview failed for {name}: {res.text}")
+                data = res.json()
+                self.assertIn("download_file_base64", data)
+                dl_b64 = data["download_file_base64"]
+                self.assertTrue(dl_b64.startswith("data:"))
+                header, b64_data = dl_b64.split(",", 1)
+                raw_bytes = base64.b64decode(b64_data)
+                self.assertGreater(len(raw_bytes), 5000, f"Download payload too small for {name}")
+                self.assertEqual(data["triage_status"], "AUTO_APPROVED", f"Expected AUTO_APPROVED for {name}, got {data['triage_status']}")
+                if name.endswith(".pdf"):
+                    self.assertLess(len(raw_bytes), 400000, f"Redacted PDF size too large: {len(raw_bytes)} bytes")
+                rss = get_current_rss_mb()
+                rss_readings.append(rss)
+
+            # Check /anonymize/file streaming binary endpoint
+            with open(self.scanned_pdf_1, "rb") as f:
+                pdf_bytes = f.read()
+            res_file = client.post("/api/v1/anonymize/file", files={"file": ("sample_prescription_1.pdf", pdf_bytes, "application/pdf")})
+            self.assertEqual(res_file.status_code, 200)
+            self.assertGreater(len(res_file.content), 5000)
+            self.assertLess(len(res_file.content), 400000)
+
+            # Verify RSS does not grow between Request 1 and Request 2
+            growth_1_to_2 = rss_readings[1] - rss_readings[0]
+            self.assertLess(growth_1_to_2, 25.0, f"RSS grew unexpectedly between Request 1 and 2: +{growth_1_to_2:.2f} MB")
+        finally:
+            if old_low_mem is not None:
+                os.environ["RENDER_LOW_MEMORY"] = old_low_mem
+            else:
+                os.environ.pop("RENDER_LOW_MEMORY", None)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -406,8 +406,8 @@ def get_web_app_html() -> str:
         }
       }
 
-      imgOrig.src = data.original_image;
-      imgRed.src = data.redacted_image;
+      imgOrig.src = data.original_image_base64 || data.original_image;
+      imgRed.src = data.redacted_image_base64 || data.redacted_image;
 
       const tbody = document.getElementById('entities-tbody');
       tbody.innerHTML = '';
@@ -430,19 +430,39 @@ def get_web_app_html() -> str:
 
       resultSection.classList.remove('hidden');
 
-      downloadBtn.onclick = async () => {
-        const fd = new FormData();
-        fd.append('file', currentFile);
-        const jur = document.getElementById('jurisdiction-select').value;
-        const fileRes = await fetch(`/api/v1/anonymize?return_type=file&jurisdiction=${jur}`, { method: 'POST', body: fd });
-        const blob = await fileRes.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = data.filename || 'anonymized_prescription.pdf';
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
+      // Zero-latency instant download directly from Base64 payload (No 2nd network roundtrip)
+      downloadBtn.onclick = () => {
+        const dataUri = data.download_file_base64 || data.data_uri;
+        if (!dataUri) {
+          alert('Download file payload is not available.');
+          return;
+        }
+        try {
+          const parts = dataUri.split(',');
+          if (parts.length < 2) {
+            throw new Error('Invalid Base64 Data URI structure.');
+          }
+          const mimeMatch = parts[0].match(/:(.*?);/);
+          const mime = mimeMatch ? mimeMatch[1] : (data.mime_type || 'application/octet-stream');
+          const byteCharacters = atob(parts[1]);
+          const byteNumbers = new Array(byteCharacters.length);
+          for (let i = 0; i < byteCharacters.length; i++) {
+            byteNumbers[i] = byteCharacters.charCodeAt(i);
+          }
+          const byteArray = new Uint8Array(byteNumbers);
+          const blob = new Blob([byteArray], { type: mime });
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = data.anonymized_filename || data.filename || 'anonymized_prescription.pdf';
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => window.URL.revokeObjectURL(url), 1000);
+        } catch (err) {
+          console.error('Download error:', err);
+          alert('Failed to generate download file: ' + err.message);
+        }
       };
 
       setSplitPos(50);

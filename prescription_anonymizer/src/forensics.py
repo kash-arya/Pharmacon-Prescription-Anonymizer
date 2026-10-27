@@ -332,6 +332,8 @@ class ForensicAuditor:
             for m in street_pat.finditer(h_line):
                 matched = m.group(0).strip()
                 m_words = [w.strip(".,;:()[]{}").lower() for w in matched.split() if len(w) >= 3]
+                if not m_words:
+                    continue
                 covered = any(mw in target_tokens or is_whitelisted(mw) or any(mw in tt.lower() for tt in target_texts) for mw in m_words)
                 if not covered:
                     has_unmasked_street = True
