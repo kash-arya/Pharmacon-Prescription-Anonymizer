@@ -89,8 +89,8 @@ def expand_person_span_on_line(
         r"^(?:Mr|Mrs|Ms|Miss|Master|Baby|Shri|Smt|Herr|Frau|Fr\.|M\.|Mme|Mlle|Monsieur|Madame|Mademoiselle|Sr\.|Sra\.|Srta\.|Señor|Señora|Señorita|Sig\.|Sig\.ra|Signor|Signora|Dott\.|Dott\.ssa|Dr|Prof)\.?$",
         re.IGNORECASE
     )
-    initial_re = re.compile(r"^[A-ZÄÖÜÁÉÍÓÚÑ]\.?$")
-    name_token_re = re.compile(r"^[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ\-'.]*$")
+    initial_re = re.compile(r"^[‘']?[A-ZÄÖÜÁÉÍÓÚÑ]\.?$")
+    name_token_re = re.compile(r"^[‘']?[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ\-'.]*$")
     stopwords = {
         "AGE", "SEX", "MALE", "FEMALE", "DATE", "ADDRESS", "PHONE", "HOSPITAL", "CLINIC",
         "RX", "RP", "TAB", "TABS", "TABLET", "TABLETS", "REFILL", "SIG", "DOSE", "DAILY",
@@ -100,7 +100,7 @@ def expand_person_span_on_line(
 
     def is_valid_name_token(token_str: str) -> bool:
         clean = token_str.strip()
-        clean_alnum = re.sub(r"^[^\w]+|[^\w]+$", "", clean)
+        clean_alnum = re.sub(r"^[^\w‘']+|[^\w‘']+$", "", clean)
         if not clean_alnum:
             return False
         upper = clean_alnum.upper()
@@ -122,7 +122,7 @@ def expand_person_span_on_line(
         w_rect, w_txt = words[idx]
         next_rect, _ = words[idx + 1]
         gap = next_rect.x0 - w_rect.x1
-        if gap > 35:
+        if gap > 75:
             break
         if is_valid_name_token(w_txt):
             curr_min = idx
@@ -134,7 +134,7 @@ def expand_person_span_on_line(
         w_rect, w_txt = words[idx]
         prev_rect, _ = words[idx - 1]
         gap = w_rect.x0 - prev_rect.x1
-        if gap > 35:
+        if gap > 90:
             break
         if is_valid_name_token(w_txt):
             curr_max = idx
@@ -434,7 +434,7 @@ def parse_form_anchors_on_lines(
                             continue
 
                         if is_multi_row:
-                            if nxt_l["rect"].y0 - prev_y1 > 28:
+                            if nxt_l["rect"].y0 - prev_y1 > 35:
                                 break
                             if nxt_l["rect"].y1 >= search_page.rect.height * 0.45:
                                 break
@@ -449,7 +449,7 @@ def parse_form_anchors_on_lines(
                             if re.search(r"\b(?:Rx|Rp\.?|Disp\.?|Medikament|Tablette|Kapsel|Age|Sex|Gender|DOB|Date|Telefon|Phone)\b", col_txt, re.I):
                                 break
                             if clean_col and not check_whitelist(col_txt) and not re.match(r"^(?:oe|—|_|-|~|aaa)+$", clean_col, re.I):
-                                if is_multi_row and abs(col_words[0][0].x0 - name_x0) > 35:
+                                if is_multi_row and abs(col_words[0][0].x0 - name_x0) > 35 and a_cat in ("PATIENT_NAME", "ADDRESS"):
                                     break
 
                                 valid = False
@@ -463,8 +463,8 @@ def parse_form_anchors_on_lines(
                                     valid = bool(re.search(r"\d|Male|Female|M|F|Normal", col_txt, re.I))
                                 elif a_cat == "INSURANCE":
                                     valid = bool(re.search(r"[A-Za-z]", col_txt))
-                                elif a_cat == "PATIENT_NAME":
-                                    valid = bool(re.search(r"(?:[A-Z]{2,}|[A-Z][a-zA-Z]{2,})", col_txt)) and not check_whitelist(col_txt)
+                                elif a_cat in ("PATIENT_NAME", "DOCTOR_INFO", "DOCTOR_NAME", "DOCTOR"):
+                                    valid = bool(re.search(r"(?:[A-Z]{2,}|[A-Z][a-zA-Z]{1,})", col_txt)) and not check_whitelist(col_txt)
                                 elif a_cat == "ADDRESS":
                                     valid = bool(re.search(r"[A-Za-z0-9]", col_txt)) and not check_whitelist(col_txt)
 
@@ -478,7 +478,7 @@ def parse_form_anchors_on_lines(
                                         c_rect.x1 + 2,
                                         c_rect.y1 + 2
                                     )
-                                    target_cat = "ADDRESS_BLOCK" if (is_multi_row and offset > 1) else f"{a_cat}_VALUE_2D{suffix}"
+                                    target_cat = "DOCTOR_NAME" if ("DOCTOR" in a_cat) else ("ADDRESS_BLOCK" if (is_multi_row and offset > 1 and a_cat == "ADDRESS") else f"{a_cat}_VALUE_2D{suffix}")
                                     add_target_fn(c_rect, target_cat, col_txt, engine=f"table_column_2d{suffix.lower()}")
                                     prev_y1 = nxt_l["rect"].y1
                                     if not is_multi_row:

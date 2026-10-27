@@ -183,7 +183,8 @@ class ForensicAuditor:
     def evaluate_redaction_confidence(
         report: Dict[str, Any],
         extracted_text: str = "",
-        is_raster: bool = True
+        is_raster: bool = True,
+        extracted_words: Optional[List[Any]] = None
     ) -> Dict[str, Any]:
         """
         Deterministic self-audit confidence scoring (Residual & Partial-Masking Audit).
@@ -376,6 +377,126 @@ class ForensicAuditor:
 
         score += max(0.0, residual_score)
 
+        # -------------------------------------------------------------------
+        # Coordinate-Based Post-Redaction Leak Audit
+        # -------------------------------------------------------------------
+        redacted_rects = []
+        patient_or_doctor_rects = []
+        for t in targets:
+            b = t.get("bbox")
+            if b and isinstance(b, dict):
+                r = pymupdf.Rect(b.get("x0", 0), b.get("y0", 0), b.get("x1", 0), b.get("y1", 0))
+                redacted_rects.append(r)
+                cat = t.get("category", "")
+                if (cat in ("PATIENT_NAME", "PATIENT_NAME_VALUE", "PATIENT_NAME_VALUE_CLAHE", "PATIENT_NAME_VALUE_2D",
+                            "PATIENT_HONORIFIC", "PATIENT_HONORIFIC_ENHANCED", "DOCTOR_NAME", "DOCTOR_NAME_ENHANCED",
+                            "DOCTOR_NAME_VALUE") or
+                    (cat.startswith("PATIENT_NAME") and not cat.endswith("_LABEL")) or
+                    (cat.startswith("DOCTOR_NAME") and not cat.endswith("_LABEL"))):
+                    patient_or_doctor_rects.append(r)
+
+        words_to_audit = extracted_words or report.get("extracted_words")
+        has_coord_leak = False
+
+        if words_to_audit:
+            # 1. Compute unmasked words (overlap with any redacted rect < 0.30)
+            unmasked_words = []
+            for w in words_to_audit:
+                w_rect = pymupdf.Rect(w[0], w[1], w[2], w[3])
+                w_txt = str(w[4]).strip()
+                w_area = max(1.0, w_rect.get_area())
+                max_overlap = 0.0
+                for r in redacted_rects:
+                    inter = w_rect & r
+                    if not inter.is_empty:
+                        overlap = inter.get_area() / w_area
+                        if overlap > max_overlap:
+                            max_overlap = overlap
+                if max_overlap < 0.30:
+                    unmasked_words.append((w_rect, w_txt))
+
+            max_y = max((w[3] for w in words_to_audit), default=1000.0)
+            clinical_markers_re = re.compile(
+                r"^\s*(?:Rx\b|Rp\.?\b|R:\b|Disp\.?\b|Sig:?\b|Prescription\b|Medications?\b|Treatment\b|Diagnosis\b|Ultrasound\b|Whole\s+Abdomen\b)",
+                re.IGNORECASE
+            )
+            clinical_body_y = None
+            for w in words_to_audit:
+                if clinical_markers_re.search(str(w[4])):
+                    if clinical_body_y is None or w[1] < clinical_body_y:
+                        clinical_body_y = w[1]
+            if clinical_body_y is None:
+                clinical_body_y = max_y * 0.70
+
+            # Check 1: Unmasked Contact / PIN / Email Check above clinical prescription body
+            contact_re = re.compile(
+                r"(@|gmail|\.com|\bPhone\b|\bE-?mail\b|\b[1-9]\d{5}\b|\b(?:\+?91[\-\s]?)?[6-9]\d{9}\b|\b\d{7,12}\b)",
+                re.IGNORECASE
+            )
+            has_unmasked_contact = False
+            for w_rect, w_txt in unmasked_words:
+                if w_rect.y1 <= clinical_body_y:
+                    clean_w = w_txt.strip(".,;:()[]{}#~*")
+                    if is_whitelisted(clean_w):
+                        continue
+                    if clean_w.isdigit() and len(clean_w) < 6:
+                        continue
+                    if contact_re.search(w_txt):
+                        has_unmasked_contact = True
+                        break
+            if has_unmasked_contact:
+                score -= 0.30
+                review_reasons.append("Unmasked contact/phone/email token detected on page")
+                has_coord_leak = True
+
+            # Check 2: Unmasked Institutional Header Check in top 22% and above clinical prescription body
+            inst_check_re = re.compile(
+                r"\b(?:IMAGING|DIAGNOSTICS|HOSPITAL|CLINIC|LABORATORY|MARKET|COLONY|CHOWK)\b",
+                re.IGNORECASE
+            )
+            has_unmasked_inst = False
+            for w_rect, w_txt in unmasked_words:
+                if w_rect.y1 <= clinical_body_y and w_rect.y0 <= max_y * 0.22:
+                    clean_w = w_txt.strip(".,;:()[]{}#~*")
+                    if is_whitelisted(clean_w):
+                        continue
+                    if inst_check_re.search(clean_w):
+                        has_unmasked_inst = True
+                        break
+            if has_unmasked_inst:
+                score -= 0.25
+                review_reasons.append("Unmasked clinic/hospital header or address detected")
+                has_coord_leak = True
+
+            # Check 3: Partial Name Split Check
+            field_label_check = {
+                "AGE", "SEX", "GENDER", "MALE", "FEMALE", "DATE", "YEARS", "YRS", "REF", "BY",
+                "NAME", "PATIENT", "DOCTOR", "DR", "MRN", "UHID", "OPD", "IPD", "TIME", "REG", "PRINT",
+                "SPECIMEN", "COLLECTED", "RECEIVED", "REPORT", "STATUS", "NORMAL", "SELF", "PERFORMED",
+                "ON", "SAMSUNG", "MACHINE", "COLOR", "DOPPLER", "WHOLE", "ABDOMEN"
+            }
+            has_partial_name = False
+            for r_target in patient_or_doctor_rects:
+                cy1 = (r_target.y0 + r_target.y1) / 2.0
+                for w_rect, w_txt in unmasked_words:
+                    if w_rect.y1 > clinical_body_y:
+                        continue
+                    cy2 = (w_rect.y0 + w_rect.y1) / 2.0
+                    if abs(cy1 - cy2) < 12.0:
+                        h_dist = max(0.0, max(w_rect.x0 - r_target.x1, r_target.x0 - w_rect.x1))
+                        if h_dist <= 45.0:
+                            clean_w = re.sub(r"[^\w]", "", w_txt)
+                            if len(clean_w) >= 3 and clean_w[0].isupper() and not is_whitelisted(clean_w):
+                                if clean_w.upper() not in field_label_check:
+                                    has_partial_name = True
+                                    break
+                if has_partial_name:
+                    break
+            if has_partial_name:
+                score -= 0.30
+                review_reasons.append("Partial name redaction detected (adjacent name token unmasked)")
+                has_coord_leak = True
+
         # Realistic ceiling
         ceiling = 0.96 if is_raster else 0.99
         final_score = round(max(0.0, min(ceiling, score)), 2)
@@ -387,15 +508,22 @@ class ForensicAuditor:
             "Address label present in text but no address span was redacted",
             "Potential unmasked street or postal address in header",
             "Unmasked numeric ID or phone sequence detected",
-            "Unmasked email or URL detected"
+            "Unmasked email or URL detected",
+            "Unmasked contact/phone/email token detected on page",
+            "Unmasked clinic/hospital header or address detected",
+            "Partial name redaction detected (adjacent name token unmasked)"
         }
         has_critical = any(r in critical_reasons for r in review_reasons)
 
-        if final_score >= 0.85 and not has_critical:
+        if final_score >= 0.85 and not has_critical and not has_coord_leak:
             triage_status = "AUTO_APPROVED"
         elif final_score >= 0.80 and len(review_reasons) == 0:
             triage_status = "AUTO_APPROVED"
         else:
+            triage_status = "NEEDS_HUMAN_REVIEW"
+
+        if has_coord_leak:
+            final_score = min(final_score, 0.72)
             triage_status = "NEEDS_HUMAN_REVIEW"
 
         return {

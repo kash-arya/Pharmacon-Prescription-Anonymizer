@@ -502,11 +502,33 @@ class LocalImageRedactor:
             r"\b(?:M\.?B\.?B\.?S|M\.?D|M\.?S|D\.?M\.?R\.?D|D\.?N\.?B|F\.?R\.?C\.?R|F\.?R\.?C\.?S|Regn?\.?|MCI|NMC|FRACGP|MRCGP|MBChB|FRACP|O\.?D\.?|D\.?O\.?|PharmD)\b",
             re.IGNORECASE
         )
+        # Rule 1B: Top Institutional Banner & Contact Block Sweep (Top 22% of Page)
+        top_22_y = page.rect.height * 0.22
+        inst_keywords = re.compile(
+            r"\b(?:IMAGING|DIAGNOSTICS|HOSPITAL|CLINIC|CENTRE|CENTER|LABORATORY|MEDICAL|NURSING|INSTITUTE)\b",
+            re.IGNORECASE
+        )
+        contact_keywords = re.compile(
+            r"\b(?:Phone|Ph:|Mob|Tel|E-?mail|Email|@|gmail|Market|Colony|Chowk|Road|Pin|Haryana|Punjab|Delhi)\b",
+            re.IGNORECASE
+        )
         for idx, line in enumerate(line_objects):
             line_str = line["text"].strip()
             if self.is_whitelisted(line_str) or len(line_str) < 3:
                 continue
-            if line["rect"].y1 <= header_zone_y:
+            if line["rect"].y0 <= top_22_y and (inst_keywords.search(line_str) or contact_keywords.search(line_str)):
+                l_words = line.get("words", [])
+                if l_words:
+                    min_x = min(w[0].x0 for w in l_words)
+                    max_x = max(w[0].x1 for w in l_words)
+                    min_y = min(w[0].y0 for w in l_words)
+                    max_y = max(w[0].y1 for w in l_words)
+                else:
+                    min_x, max_x = line["rect"].x0, line["rect"].x1
+                    min_y, max_y = line["rect"].y0, line["rect"].y1
+                hdr_rect = pymupdf.Rect(max(0, min_x - 4), max(0, min_y - 2), min(page.rect.width, max_x + 4), max_y + 2)
+                add_target(hdr_rect, "HEADER_INSTITUTIONAL_BANNER", line_str, engine="header_banner_sweep")
+            elif line["rect"].y1 <= header_zone_y:
                 if facility_keywords.search(line_str):
                     add_target(line["rect"], "CLINIC_FACILITY", line_str, engine="header_facility_rule")
                 elif provider_creds.search(line_str):
@@ -545,31 +567,52 @@ class LocalImageRedactor:
         # -------------------------------------------------------------------
         tmp_doc_enh = None
         line_objects_enh = []
-        if not (is_low_mem and len(words) >= 12):
-            try:
+        try:
+            if is_low_mem:
+                h_ratio = 0.28
+                enh_dpi = 120
+            else:
                 is_std_sheet = (page.rect.width >= 550 and page.rect.height >= 700)
                 h_ratio = 0.45 if is_std_sheet else (1.0 if (max_pt < 800 or len(words) < 45) else 0.45)
-                enh_dpi = 120 if is_low_mem else self.dpi
-                words_enh, p_enh, tp_enh, tmp_doc_enh = get_enhanced_fullpage_ocr(
-                    page, dpi=enh_dpi, h_ratio=h_ratio, lang=all_langs if (is_eu or len(words) < 20) else "eng", tessdata_dir=self.tessdata_dir
-                )
-                full_enh = p_enh.get_text(textpage=tp_enh)
+                enh_dpi = self.dpi
+            words_enh, p_enh, tp_enh, tmp_doc_enh = get_enhanced_fullpage_ocr(
+                page, dpi=enh_dpi, h_ratio=h_ratio, lang=all_langs if (is_eu or len(words) < 20) else "eng", tessdata_dir=self.tessdata_dir
+            )
+            full_enh = p_enh.get_text(textpage=tp_enh)
 
-                # 3a. Reconstruct visual lines and run unified form anchor parsing on CLAHE pass
-                line_objects_enh = reconstruct_visual_lines(words_enh)
-                active_lines = line_objects_enh
-                parse_form_anchors_on_lines(
-                    line_objects=line_objects_enh,
-                    search_page=p_enh,
-                    textpage=tp_enh,
-                    page_bgr=page_bgr,
-                    scale_px_x=scale_px_x,
-                    scale_px_y=scale_px_y,
-                    add_target_fn=add_target,
-                    is_whitelisted_fn=self.is_whitelisted,
-                    whitelisted_rects=whitelisted_rects,
-                    suffix="_CLAHE"
-                )
+            # 3a. Reconstruct visual lines and run unified form anchor parsing on CLAHE pass
+            line_objects_enh = reconstruct_visual_lines(words_enh)
+            active_lines = line_objects_enh
+            parse_form_anchors_on_lines(
+                line_objects=line_objects_enh,
+                search_page=p_enh,
+                textpage=tp_enh,
+                page_bgr=page_bgr,
+                scale_px_x=scale_px_x,
+                scale_px_y=scale_px_y,
+                add_target_fn=add_target,
+                is_whitelisted_fn=self.is_whitelisted,
+                whitelisted_rects=whitelisted_rects,
+                suffix="_CLAHE"
+            )
+
+            # Institutional header & banner sweep on CLAHE pass
+            if line_objects_enh:
+                for line in line_objects_enh:
+                    if line["rect"].y0 <= top_22_y:
+                        line_str = line["text"].strip()
+                        if inst_keywords.search(line_str) or contact_keywords.search(line_str):
+                            l_words = line.get("words", [])
+                            if l_words:
+                                min_x = min(w[0].x0 for w in l_words)
+                                max_x = max(w[0].x1 for w in l_words)
+                                min_y = min(w[0].y0 for w in l_words)
+                                max_y = max(w[0].y1 for w in l_words)
+                            else:
+                                min_x, max_x = line["rect"].x0, line["rect"].x1
+                                min_y, max_y = line["rect"].y0, line["rect"].y1
+                            hdr_rect = pymupdf.Rect(max(0, min_x - 4), max(0, min_y - 2), min(page.rect.width, max_x + 4), max_y + 2)
+                            add_target(hdr_rect, "HEADER_INSTITUTIONAL_BANNER", line_str, engine="header_banner_sweep_clahe")
 
                 # 3b. Standalone regexes on CLAHE pass
                 for cat, reg in standalone_regexes:
@@ -618,12 +661,12 @@ class LocalImageRedactor:
                                         if is_in_clinical_zone(pr):
                                             continue
                                         add_target(pr, f"{cand['category']}_ENHANCED", part, engine="spacy_ner_clahe_part")
-            except Exception:
-                pass
-            finally:
-                active_lines = line_objects
-                if tmp_doc_enh is not None:
-                    tmp_doc_enh.close()
+        except Exception:
+            pass
+        finally:
+            active_lines = line_objects
+            if tmp_doc_enh is not None:
+                tmp_doc_enh.close()
 
         # 3e. Multi-line Patient Demographic / Address Block expansion under PATIENT_NAME
         patient_name_targets = [
@@ -691,6 +734,54 @@ class LocalImageRedactor:
                         add_target(scaled_rect, vt.category, vt.raw_text, engine=vt.engine)
                 except Exception:
                     pass
+
+        # -------------------------------------------------------------------
+        # 5. Rule 1A: Geometric Same-Line Name Completion Sweep
+        # -------------------------------------------------------------------
+        name_initial_re = re.compile(r"^[‘']?[A-ZÄÖÜÁÉÍÓÚÑ]\.?$")
+        name_token_re = re.compile(r"^[‘']?[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ\-'.]*$")
+        field_label_re = re.compile(
+            r"\b(?:Age|Sex|Gender|DOB|Date|Reg\.?|Time|Collected|Received|Report|Print|Diagnosis|Rx|Rp\.?|Disp\.?|Ref\.?\s*By|MRN|UHID|OPD|IPD)\b",
+            re.IGNORECASE
+        )
+        all_words_pool = list(words)
+        if 'line_objects_enh' in locals() and line_objects_enh:
+            for lo in line_objects_enh:
+                for w in lo.get("words", []):
+                    all_words_pool.append((w[0].x0, w[0].y0, w[0].x1, w[0].y1, w[1]))
+
+        for t in targets:
+            if (t.category.startswith("PATIENT_NAME") or t.category.startswith("DOCTOR") or "HONORIFIC" in t.category) and not t.category.endswith("_LABEL"):
+                t_cy = (t.bbox.y0 + t.bbox.y1) / 2.0
+                t_h = max(14.0, t.bbox.y1 - t.bbox.y0)
+
+                # Check words to the right up to column gap (dx < page.rect.width * 0.18)
+                curr_right_x = t.bbox.x1
+                while True:
+                    candidates = []
+                    for w in all_words_pool:
+                        w_x0, w_y0, w_x1, w_y1, w_txt = w[0], w[1], w[2], w[3], w[4]
+                        w_cy = (w_y0 + w_y1) / 2.0
+                        if abs(w_cy - t_cy) < t_h * 0.85:
+                            dx = w_x0 - curr_right_x
+                            if 0 < dx < page.rect.width * 0.18:
+                                candidates.append((dx, w))
+                    if not candidates:
+                        break
+                    candidates.sort(key=lambda item: item[0])
+                    closest_dx, closest_w = candidates[0]
+                    w_x0, w_y0, w_x1, w_y1, w_txt = closest_w[0], closest_w[1], closest_w[2], closest_w[3], closest_w[4]
+                    clean_w = w_txt.strip(".,;:()[]{}#~*")
+                    if field_label_re.search(w_txt) or self.is_whitelisted(clean_w):
+                        break
+                    if name_initial_re.match(clean_w) or name_token_re.match(clean_w) or (clean_w.isupper() and len(clean_w) <= 6):
+                        t.bbox.x1 = max(t.bbox.x1, w_x1 + 3)
+                        t.bbox.y0 = min(t.bbox.y0, w_y0 - 2)
+                        t.bbox.y1 = max(t.bbox.y1, w_y1 + 2)
+                        t.raw_text = f"{t.raw_text} {w_txt}".strip()
+                        curr_right_x = t.bbox.x1
+                    else:
+                        break
 
         try:
             del page_bgr, pix, arr
@@ -849,10 +940,15 @@ class LocalImageRedactor:
                     engine=t.engine
                 ))
 
+            scaled_words = [
+                (w[0] * scale_back_x, w[1] * scale_back_y, w[2] * scale_back_x, w[3] * scale_back_y, w[4])
+                for w in (getattr(self, "_last_extracted_words", []) or [])
+            ]
             conf = ForensicAuditor.evaluate_redaction_confidence(
                 report={"redacted_targets": [t.model_dump() for t in reported_targets]},
                 extracted_text=final_extracted_text,
-                is_raster=True
+                is_raster=True,
+                extracted_words=scaled_words
             )
 
             if is_low_mem:
@@ -964,7 +1060,8 @@ class LocalImageRedactor:
         conf = ForensicAuditor.evaluate_redaction_confidence(
             report={"redacted_targets": [t.model_dump() for t in all_targets]},
             extracted_text="\n".join(collected_ocr_text),
-            is_raster=True
+            is_raster=True,
+            extracted_words=getattr(self, "_last_extracted_words", None)
         )
 
         if is_low_mem:
