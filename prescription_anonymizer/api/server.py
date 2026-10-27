@@ -10,6 +10,7 @@ Endpoints:
     GET  /docs                -> Interactive OpenAPI Swagger UI
     POST /api/v1/anonymize    -> Multipart prescription redaction endpoint
 """
+from __future__ import annotations
 
 import os
 import sys
@@ -21,7 +22,7 @@ import json
 import io
 import gc
 import ctypes
-from typing import Optional, Literal, List, Dict, Any
+from typing import Any, Dict, List, Optional, Tuple, Union, Literal
 from pydantic import BaseModel, Field
 from PIL import Image, ImageDraw, ImageFont
 import pymupdf
@@ -205,7 +206,7 @@ def _purge_system_memory():
         image_engine._last_extracted_text = ""
 
 
-def _run_redaction(fmt: str, input_path: str, output_path: str, jurisdiction: str) -> Tuple[str, Dict[str, Any]]:
+def _run_redaction(fmt: str, input_path: str, output_path: str, jurisdiction: str) -> tuple[str, Dict[str, Any]]:
     """Executes redaction pipeline directly in-process (single process)."""
     if fmt == "VECTOR_DIGITAL":
         return "Native Vector Stream Redactor (PyMuPDF)", vector_engine.redact(input_path, output_path, jurisdiction=jurisdiction)
