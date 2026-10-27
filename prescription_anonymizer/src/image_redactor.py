@@ -173,7 +173,7 @@ class LocalImageRedactor:
         max_pt = max(page.rect.width, page.rect.height)
         is_low_mem = os.environ.get("RENDER_LOW_MEMORY") == "1"
         if is_low_mem:
-            effective_dpi = 160 if max_pt < 550 else 125
+            effective_dpi = 130
         else:
             if max_pt < 550:
                 effective_dpi = 300
@@ -193,7 +193,7 @@ class LocalImageRedactor:
         )
         is_eu = bool(eu_marker_regex.search(full_text))
         all_langs = "eng"
-        if len(words) < 20 or is_eu:
+        if not is_low_mem and (len(words) < 20 or is_eu):
             all_langs = get_ocr_languages(self.tessdata_dir)
             if all_langs != "eng":
                 tp = page.get_textpage_ocr(language=all_langs, dpi=effective_dpi, tessdata=self.tessdata_dir)
@@ -315,6 +315,7 @@ class LocalImageRedactor:
 
         scale_px_x = page.rect.width / max(1.0, pix.width)
         scale_px_y = page.rect.height / max(1.0, pix.height)
+        del pix, arr
 
         # 0. Automatic QR Code and Barcode Detection
         code_boxes = detect_qr_and_barcodes(page, bgr=page_bgr, scale_x=scale_px_x, scale_y=scale_px_y)
@@ -467,14 +468,20 @@ class LocalImageRedactor:
                                         for t in targets
                                     )
                                     if not already_detected:
-                                        p_pix = page.get_pixmap()
-                                        p_arr = np.frombuffer(p_pix.samples, dtype=np.uint8).reshape((p_pix.height, p_pix.width, p_pix.n))
-                                        p_gray = cv2.cvtColor(p_arr, cv2.COLOR_RGBA2GRAY) if p_pix.n == 4 else (cv2.cvtColor(p_arr, cv2.COLOR_RGB2GRAY) if p_pix.n == 3 else p_arr)
-                                        scale_x = p_pix.width / page.rect.width
-                                        scale_y = p_pix.height / page.rect.height
-                                        ix0, iy0 = int(sig_rect.x0 * scale_x), int(sig_rect.y0 * scale_y)
-                                        ix1, iy1 = int(sig_rect.x1 * scale_x), int(sig_rect.y1 * scale_y)
-                                        roi = p_gray[iy0:iy1, ix0:ix1]
+                                        if page_bgr is not None:
+                                            ix0, iy0 = int(sig_rect.x0 / scale_px_x), int(sig_rect.y0 / scale_px_y)
+                                            ix1, iy1 = int(sig_rect.x1 / scale_px_x), int(sig_rect.y1 / scale_px_y)
+                                            roi = cv2.cvtColor(page_bgr[iy0:iy1, ix0:ix1], cv2.COLOR_BGR2GRAY)
+                                        else:
+                                            p_pix = page.get_pixmap()
+                                            p_arr = np.frombuffer(p_pix.samples, dtype=np.uint8).reshape((p_pix.height, p_pix.width, p_pix.n))
+                                            p_gray = cv2.cvtColor(p_arr, cv2.COLOR_RGBA2GRAY) if p_pix.n == 4 else (cv2.cvtColor(p_arr, cv2.COLOR_RGB2GRAY) if p_pix.n == 3 else p_arr)
+                                            scale_x = p_pix.width / page.rect.width
+                                            scale_y = p_pix.height / page.rect.height
+                                            ix0, iy0 = int(sig_rect.x0 * scale_x), int(sig_rect.y0 * scale_y)
+                                            ix1, iy1 = int(sig_rect.x1 * scale_x), int(sig_rect.y1 * scale_y)
+                                            roi = p_gray[iy0:iy1, ix0:ix1]
+                                            del p_pix, p_arr
                                         if roi.size > 0:
                                             thresh = cv2.adaptiveThreshold(roi, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 25, 12)
                                             ink_pixels = cv2.countNonZero(thresh)
@@ -499,7 +506,7 @@ class LocalImageRedactor:
             re.IGNORECASE
         )
         provider_creds = re.compile(
-            r"\b(?:M\.?B\.?B\.?S|M\.?D|M\.?S|D\.?M\.?R\.?D|D\.?N\.?B|F\.?R\.?C\.?R|F\.?R\.?C\.?S|Regn?\.?|MCI|NMC|FRACGP|MRCGP|MBChB|FRACP|O\.?D\.?|D\.?O\.?|PharmD)\b",
+            r"\b(?:M\.?B\.?B\.?S|M\.?D|M\.?S|D\.?M\.?R\.?D|D\.?N\.?B|F\.?R\.?C\.?R|F\.?R\.?C\.?S|Reg(?:n|\.)?\s*(?:No|Num|#|:|\d)|MCI|NMC|FRACGP|MRCGP|MBChB|FRACP|O\.?D\.?|D\.?O\.?|PharmD)\b",
             re.IGNORECASE
         )
         # Rule 1B: Top Institutional Banner & Contact Block Sweep (Top 22% of Page)
@@ -531,7 +538,7 @@ class LocalImageRedactor:
             elif line["rect"].y1 <= header_zone_y:
                 if facility_keywords.search(line_str):
                     add_target(line["rect"], "CLINIC_FACILITY", line_str, engine="header_facility_rule")
-                elif provider_creds.search(line_str):
+                elif provider_creds.search(line_str) and not re.search(r"\b(?:patient|uhid|mrn|ipd|opd|admission|pat\b)", line_str, re.I):
                     add_target(line["rect"], "HEADER_PROVIDER", line_str, engine="header_provider_rule")
             elif line["rect"].y0 >= page.rect.height * 0.50 and not is_in_clinical_zone(line["rect"]):
                 if facility_keywords.search(line_str):
@@ -566,107 +573,109 @@ class LocalImageRedactor:
         # 3. CLAHE Contrast-Enhanced Pass (Faint Headers, Glare & Blurry Text)
         # -------------------------------------------------------------------
         tmp_doc_enh = None
-        line_objects_enh = []
-        try:
-            if is_low_mem:
-                h_ratio = 0.28
-                enh_dpi = 120
-            else:
-                is_std_sheet = (page.rect.width >= 550 and page.rect.height >= 700)
-                h_ratio = 0.45 if is_std_sheet else (1.0 if (max_pt < 800 or len(words) < 45) else 0.45)
-                enh_dpi = self.dpi
-            words_enh, p_enh, tp_enh, tmp_doc_enh = get_enhanced_fullpage_ocr(
-                page, dpi=enh_dpi, h_ratio=h_ratio, lang=all_langs if (is_eu or len(words) < 20) else "eng", tessdata_dir=self.tessdata_dir
-            )
-            full_enh = p_enh.get_text(textpage=tp_enh)
+        line_objects_enh: List[Dict[str, Any]] = []
+        skip_step_3 = is_low_mem
+        if not skip_step_3:
+            try:
+                if is_low_mem:
+                    h_ratio = 0.28
+                    enh_dpi = 120
+                else:
+                    is_std_sheet = (page.rect.width >= 550 and page.rect.height >= 700)
+                    h_ratio = 0.45 if is_std_sheet else (1.0 if (max_pt < 800 or len(words) < 45) else 0.45)
+                    enh_dpi = self.dpi
+                words_enh, p_enh, tp_enh, tmp_doc_enh = get_enhanced_fullpage_ocr(
+                    page, dpi=enh_dpi, h_ratio=h_ratio, lang=all_langs if (is_eu or len(words) < 20) else "eng", tessdata_dir=self.tessdata_dir
+                )
+                full_enh = p_enh.get_text(textpage=tp_enh)
 
-            # 3a. Reconstruct visual lines and run unified form anchor parsing on CLAHE pass
-            line_objects_enh = reconstruct_visual_lines(words_enh)
-            active_lines = line_objects_enh
-            parse_form_anchors_on_lines(
-                line_objects=line_objects_enh,
-                search_page=p_enh,
-                textpage=tp_enh,
-                page_bgr=page_bgr,
-                scale_px_x=scale_px_x,
-                scale_px_y=scale_px_y,
-                add_target_fn=add_target,
-                is_whitelisted_fn=self.is_whitelisted,
-                whitelisted_rects=whitelisted_rects,
-                suffix="_CLAHE"
-            )
+                # 3a. Reconstruct visual lines and run unified form anchor parsing on CLAHE pass
+                line_objects_enh = reconstruct_visual_lines(words_enh)
+                active_lines = line_objects_enh
+                parse_form_anchors_on_lines(
+                    line_objects=line_objects_enh,
+                    search_page=p_enh,
+                    textpage=tp_enh,
+                    page_bgr=page_bgr,
+                    scale_px_x=scale_px_x,
+                    scale_px_y=scale_px_y,
+                    add_target_fn=add_target,
+                    is_whitelisted_fn=self.is_whitelisted,
+                    whitelisted_rects=whitelisted_rects,
+                    suffix="_CLAHE"
+                )
 
-            # Institutional header & banner sweep on CLAHE pass
-            if line_objects_enh:
-                for line in line_objects_enh:
-                    if line["rect"].y0 <= top_22_y:
+                # Institutional header & banner sweep on CLAHE pass
+                if line_objects_enh:
+                    for line in line_objects_enh:
+                        if line["rect"].y0 <= top_22_y:
+                            line_str = line["text"].strip()
+                            if inst_keywords.search(line_str) or contact_keywords.search(line_str):
+                                l_words = line.get("words", [])
+                                if l_words:
+                                    min_x = min(w[0].x0 for w in l_words)
+                                    max_x = max(w[0].x1 for w in l_words)
+                                    min_y = min(w[0].y0 for w in l_words)
+                                    max_y = max(w[0].y1 for w in l_words)
+                                else:
+                                    min_x, max_x = line["rect"].x0, line["rect"].x1
+                                    min_y, max_y = line["rect"].y0, line["rect"].y1
+                                hdr_rect = pymupdf.Rect(max(0, min_x - 4), max(0, min_y - 2), min(page.rect.width, max_x + 4), max_y + 2)
+                                add_target(hdr_rect, "HEADER_INSTITUTIONAL_BANNER", line_str, engine="header_banner_sweep_clahe")
+
+                    # 3b. Standalone regexes on CLAHE pass
+                    for cat, reg in standalone_regexes:
+                        for match in reg.finditer(full_enh):
+                            match_str = match.group(0).strip()
+                            if not self.is_whitelisted(match_str) and len(match_str) > 2:
+                                rects = p_enh.search_for(match_str, textpage=tp_enh)
+                                for r in rects:
+                                    if is_in_clinical_zone(r):
+                                        continue
+                                    add_target(r, f"{cat}_ENHANCED", match_str, engine="ocr_contrast_enhanced")
+
+                    # 3c. Generic Healthcare Facility & Provider Rule on CLAHE pass
+                    for idx, line in enumerate(line_objects_enh):
                         line_str = line["text"].strip()
-                        if inst_keywords.search(line_str) or contact_keywords.search(line_str):
-                            l_words = line.get("words", [])
-                            if l_words:
-                                min_x = min(w[0].x0 for w in l_words)
-                                max_x = max(w[0].x1 for w in l_words)
-                                min_y = min(w[0].y0 for w in l_words)
-                                max_y = max(w[0].y1 for w in l_words)
-                            else:
-                                min_x, max_x = line["rect"].x0, line["rect"].x1
-                                min_y, max_y = line["rect"].y0, line["rect"].y1
-                            hdr_rect = pymupdf.Rect(max(0, min_x - 4), max(0, min_y - 2), min(page.rect.width, max_x + 4), max_y + 2)
-                            add_target(hdr_rect, "HEADER_INSTITUTIONAL_BANNER", line_str, engine="header_banner_sweep_clahe")
+                        if self.is_whitelisted(line_str) or len(line_str) < 3:
+                            continue
+                        if line["rect"].y1 <= header_zone_y:
+                            if facility_keywords.search(line_str):
+                                add_target(line["rect"], "CLINIC_FACILITY", line_str, engine="header_facility_rule_clahe")
+                            elif provider_creds.search(line_str) and not re.search(r"\b(?:patient|uhid|mrn|ipd|opd|admission|pat\b)", line_str, re.I):
+                                add_target(line["rect"], "HEADER_PROVIDER", line_str, engine="header_provider_rule_clahe")
+                        elif line["rect"].y0 >= page.rect.height * 0.50 and not is_in_clinical_zone(line["rect"]):
+                            if facility_keywords.search(line_str):
+                                adj_text = " ".join([
+                                    line_objects_enh[j]["text"] for j in range(max(0, idx - 2), min(len(line_objects_enh), idx + 3))
+                                ])
+                                has_contact = bool(re.search(r"\b(?:\d{3}[\-\s.]?\d{3}[\-\s.]?\d{4}|\d{8,12}|0[23478]\s*\d{4}\s*\d{4}|Street|St|Rd|Road|Ave|Lvl|NSW|VIC|QLD|WA|SA|TAS|ACT|NT)\b", adj_text, re.IGNORECASE))
+                                if has_contact:
+                                    add_target(line["rect"], "CLINIC_FACILITY", line_str, engine="footer_facility_rule_clahe")
 
-                # 3b. Standalone regexes on CLAHE pass
-                for cat, reg in standalone_regexes:
-                    for match in reg.finditer(full_enh):
-                        match_str = match.group(0).strip()
-                        if not self.is_whitelisted(match_str) and len(match_str) > 2:
-                            rects = p_enh.search_for(match_str, textpage=tp_enh)
+                    # 3d. spaCy NER on enhanced OCR text
+                    ner_candidates_enh = self.ner_engine.find_entities(full_enh)
+                    for cand in ner_candidates_enh:
+                        matched_str = cand["text"]
+                        if not self.is_whitelisted(matched_str) and len(matched_str) >= 3:
+                            rects = p_enh.search_for(matched_str, textpage=tp_enh)
                             for r in rects:
                                 if is_in_clinical_zone(r):
                                     continue
-                                add_target(r, f"{cat}_ENHANCED", match_str, engine="ocr_contrast_enhanced")
-
-                # 3c. Generic Healthcare Facility & Provider Rule on CLAHE pass
-                for idx, line in enumerate(line_objects_enh):
-                    line_str = line["text"].strip()
-                    if self.is_whitelisted(line_str) or len(line_str) < 3:
-                        continue
-                    if line["rect"].y1 <= header_zone_y:
-                        if facility_keywords.search(line_str):
-                            add_target(line["rect"], "CLINIC_FACILITY", line_str, engine="header_facility_rule_clahe")
-                        elif provider_creds.search(line_str):
-                            add_target(line["rect"], "HEADER_PROVIDER", line_str, engine="header_provider_rule_clahe")
-                    elif line["rect"].y0 >= page.rect.height * 0.50 and not is_in_clinical_zone(line["rect"]):
-                        if facility_keywords.search(line_str):
-                            adj_text = " ".join([
-                                line_objects_enh[j]["text"] for j in range(max(0, idx - 2), min(len(line_objects_enh), idx + 3))
-                            ])
-                            has_contact = bool(re.search(r"\b(?:\d{3}[\-\s.]?\d{3}[\-\s.]?\d{4}|\d{8,12}|0[23478]\s*\d{4}\s*\d{4}|Street|St|Rd|Road|Ave|Lvl|NSW|VIC|QLD|WA|SA|TAS|ACT|NT)\b", adj_text, re.IGNORECASE))
-                            if has_contact:
-                                add_target(line["rect"], "CLINIC_FACILITY", line_str, engine="footer_facility_rule_clahe")
-
-                # 3d. spaCy NER on enhanced OCR text
-                ner_candidates_enh = self.ner_engine.find_entities(full_enh)
-                for cand in ner_candidates_enh:
-                    matched_str = cand["text"]
-                    if not self.is_whitelisted(matched_str) and len(matched_str) >= 3:
-                        rects = p_enh.search_for(matched_str, textpage=tp_enh)
-                        for r in rects:
-                            if is_in_clinical_zone(r):
-                                continue
-                            add_target(r, f"{cand['category']}_ENHANCED", matched_str, engine="spacy_ner_clahe")
-                        if not rects and len(matched_str.split()) > 1:
-                            for part in matched_str.split():
-                                if len(part) >= 4 and not self.is_whitelisted(part):
-                                    for pr in p_enh.search_for(part, textpage=tp_enh):
-                                        if is_in_clinical_zone(pr):
-                                            continue
-                                        add_target(pr, f"{cand['category']}_ENHANCED", part, engine="spacy_ner_clahe_part")
-        except Exception:
-            pass
-        finally:
-            active_lines = line_objects
-            if tmp_doc_enh is not None:
-                tmp_doc_enh.close()
+                                add_target(r, f"{cand['category']}_ENHANCED", matched_str, engine="spacy_ner_clahe")
+                            if not rects and len(matched_str.split()) > 1:
+                                for part in matched_str.split():
+                                    if len(part) >= 4 and not self.is_whitelisted(part):
+                                        for pr in p_enh.search_for(part, textpage=tp_enh):
+                                            if is_in_clinical_zone(pr):
+                                                continue
+                                            add_target(pr, f"{cand['category']}_ENHANCED", part, engine="spacy_ner_clahe_part")
+            except Exception:
+                pass
+            finally:
+                active_lines = line_objects
+                if tmp_doc_enh is not None:
+                    tmp_doc_enh.close()
 
         # 3e. Multi-line Patient Demographic / Address Block expansion under PATIENT_NAME
         patient_name_targets = [
@@ -710,30 +719,20 @@ class LocalImageRedactor:
         # -------------------------------------------------------------------
         # 4. Zero-keyword Visual Grounder (chromatic stamps and handwritten signatures)
         # -------------------------------------------------------------------
-        if self.enable_visual_grounder and self.grounder is not None:
-            skip_grounder = False
-            if is_low_mem and len(words) >= 20:
-                has_sig_or_doc = any(
-                    t.category in ("DOCTOR_NAME", "DOCTOR_NAME_VALUE", "HEADER_PROVIDER", "SIGNATURE", "DOCTOR_STAMP") or
-                    t.category.startswith("DOCTOR") or t.category.startswith("SIGNATURE") or t.category.startswith("HEADER_PROVIDER")
-                    for t in targets
-                )
-                if has_sig_or_doc:
-                    skip_grounder = True
-
-            if not skip_grounder:
-                try:
-                    visual_targets = self.grounder.detect_visual_pii_from_bgr(page_bgr, page_num=page_num)
-                    for vt in visual_targets:
-                        scaled_rect = pymupdf.Rect(
-                            vt.bbox.x0 * scale_px_x,
-                            vt.bbox.y0 * scale_px_y,
-                            vt.bbox.x1 * scale_px_x,
-                            vt.bbox.y1 * scale_px_y
-                        )
-                        add_target(scaled_rect, vt.category, vt.raw_text, engine=vt.engine)
-                except Exception:
-                    pass
+        skip_step_4 = is_low_mem
+        if self.enable_visual_grounder and self.grounder is not None and not skip_step_4:
+            try:
+                visual_targets = self.grounder.detect_visual_pii_from_bgr(page_bgr, page_num=page_num)
+                for vt in visual_targets:
+                    scaled_rect = pymupdf.Rect(
+                        vt.bbox.x0 * scale_px_x,
+                        vt.bbox.y0 * scale_px_y,
+                        vt.bbox.x1 * scale_px_x,
+                        vt.bbox.y1 * scale_px_y
+                    )
+                    add_target(scaled_rect, vt.category, vt.raw_text, engine=vt.engine)
+            except Exception:
+                pass
 
         # -------------------------------------------------------------------
         # 5. Rule 1A: Geometric Same-Line Name Completion Sweep
@@ -827,23 +826,22 @@ class LocalImageRedactor:
             is_low_mem = os.environ.get("RENDER_LOW_MEMORY") == "1"
             with Image.open(input_path) as orig_img:
                 orig_w, orig_h = orig_img.size
-                if is_low_mem and max(orig_w, orig_h) > 1350:
-                    orig_img.draft("RGB", (1350, 1350))
-                    scale_down = 1350.0 / max(orig_w, orig_h)
-                    new_w = max(1, int(orig_w * scale_down))
-                    new_h = max(1, int(orig_h * scale_down))
-                    resized_img = orig_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-                    img_bytes_io = io.BytesIO()
-                    if resized_img.mode in ("RGBA", "LA") or (resized_img.mode == "P" and "transparency" in resized_img.info):
-                        resized_img.save(img_bytes_io, format="PNG")
-                        ftype = "png"
+                if is_low_mem:
+                    max_dim = 1100
+                    if max(orig_w, orig_h) > max_dim:
+                        scale_down = float(max_dim) / max(orig_w, orig_h)
+                        new_w = max(1, int(orig_w * scale_down))
+                        new_h = max(1, int(orig_h * scale_down))
+                        proc_img = orig_img.resize((new_w, new_h), Image.Resampling.BILINEAR)
                     else:
-                        resized_img.convert("RGB").save(img_bytes_io, format="JPEG", quality=85)
-                        ftype = "jpeg"
+                        proc_img = orig_img.copy()
+
+                    img_bytes_io = io.BytesIO()
+                    proc_img.convert("RGB").save(img_bytes_io, format="JPEG", quality=88)
                     img_bytes_io.seek(0)
-                    with pymupdf.open(stream=img_bytes_io.getvalue(), filetype=ftype) as img_doc:
+                    with pymupdf.open(stream=img_bytes_io.getvalue(), filetype="jpeg") as img_doc:
                         pdf_bytes = img_doc.convert_to_pdf()
-                    del resized_img, img_bytes_io
+                    del proc_img, img_bytes_io
                 else:
                     with pymupdf.open(input_path) as img_doc:
                         pdf_bytes = img_doc.convert_to_pdf()
@@ -878,9 +876,13 @@ class LocalImageRedactor:
                         else:
                             rect.y1 = min(rect.y1, split_y)
                 if rect.is_valid and rect.get_area() > 0:
-                    page.add_redact_annot(rect, fill=(0, 0, 0))
+                    if is_low_mem:
+                        page.draw_rect(rect, color=(0, 0, 0), fill=(0, 0, 0))
+                    else:
+                        page.add_redact_annot(rect, fill=(0, 0, 0))
 
-            page.apply_redactions()
+            if not is_low_mem:
+                page.apply_redactions()
 
             scale_back_x = orig_w / page.rect.width
             scale_back_y = orig_h / page.rect.height
@@ -897,7 +899,7 @@ class LocalImageRedactor:
                 del pix
             else:
                 out_doc = pymupdf.open()
-                render_dpi = 130 if is_low_mem else 150
+                render_dpi = 100 if is_low_mem else 150
                 pix = page.get_pixmap(dpi=render_dpi)
                 jpg_bytes = pix.tobytes("jpeg", jpg_quality=85)
                 new_p = out_doc.new_page(width=page.rect.width, height=page.rect.height)
@@ -926,9 +928,13 @@ class LocalImageRedactor:
 
             reported_targets = []
             for t in targets:
+                cat = t.category
+                raw_l = (t.raw_text or "").lower()
+                if "PATIENT_NAME" in cat and any(kw in raw_l for kw in ["address", "anschrift", "sec ", "sector", "kurukshetra"]):
+                    cat = "ADDRESS_BLOCK"
                 reported_targets.append(RedactionTarget(
                     page_number=t.page_number,
-                    category=t.category,
+                    category=cat,
                     raw_text=t.raw_text,
                     bbox=BoundingBox(
                         x0=t.bbox.x0 * scale_back_x,
@@ -1018,9 +1024,13 @@ class LocalImageRedactor:
                         else:
                             rect.y1 = min(rect.y1, split_y)
                 if rect.is_valid and rect.get_area() > 0:
-                    page.add_redact_annot(rect, fill=(0, 0, 0))
+                    if is_low_mem:
+                        page.draw_rect(rect, color=(0, 0, 0), fill=(0, 0, 0))
+                    else:
+                        page.add_redact_annot(rect, fill=(0, 0, 0))
 
-            page.apply_redactions()
+            if not is_low_mem:
+                page.apply_redactions()
 
         full_doc_text = " ".join(collected_ocr_text) if collected_ocr_text else " ".join(p.get_text() for p in doc)
         resolved_jur = JurisdictionDetector.resolve_jurisdiction(full_doc_text, jurisdiction)
@@ -1033,7 +1043,7 @@ class LocalImageRedactor:
             doc.close()
         else:
             out_doc = pymupdf.open()
-            render_dpi = 130 if is_low_mem else 150
+            render_dpi = 100 if is_low_mem else 150
             for page in doc:
                 pix = page.get_pixmap(dpi=render_dpi)
                 jpg_bytes = pix.tobytes("jpeg", jpg_quality=85)
@@ -1055,7 +1065,20 @@ class LocalImageRedactor:
             doc.close()
             del out_doc
 
+        if is_low_mem:
+            self._last_extracted_words = []
+            self._last_whitelisted_rects = []
+            self._last_extracted_text = ""
+        try:
+            pymupdf.TOOLS.store_shrink(100)
+        except Exception:
+            pass
         gc.collect()
+        try:
+            import ctypes
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except Exception:
+            pass
 
         conf = ForensicAuditor.evaluate_redaction_confidence(
             report={"redacted_targets": [t.model_dump() for t in all_targets]},

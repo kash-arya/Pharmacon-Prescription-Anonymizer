@@ -7,8 +7,7 @@ and healthcare facility ORGs locally without sending data to external APIs.
 import os
 import re
 from typing import List, Dict, Any, Optional
-import spacy
-from .entities import is_whitelisted
+from .entities import is_whitelisted, is_clinical_term
 
 
 class LocalNEREngine:
@@ -21,31 +20,46 @@ class LocalNEREngine:
     def __new__(cls) -> "LocalNEREngine":
         if cls._instance is None:
             cls._instance = super().__new__(cls)
-            try:
-                import en_core_web_sm
-                cls._nlp_en = en_core_web_sm.load(exclude=["parser", "lemmatizer", "attribute_ruler", "tagger"])
-            except Exception:
-                try:
-                    cls._nlp_en = spacy.load("en_core_web_sm", exclude=["parser", "lemmatizer", "attribute_ruler", "tagger"])
-                except Exception:
-                    cls._nlp_en = None
-
-            cls._nlp_xx = None
-
+            cls._instance._init_models()
         return cls._instance
+
+    def _init_models(self) -> None:
+        if os.environ.get("RENDER_LOW_MEMORY") == "1":
+            self._nlp_en = None
+            self._nlp_xx = None
+            return
+
+        try:
+            import en_core_web_sm
+            self._nlp_en = en_core_web_sm.load(exclude=["parser", "lemmatizer", "attribute_ruler", "tagger"])
+        except Exception:
+            try:
+                import spacy
+                self._nlp_en = spacy.load("en_core_web_sm", exclude=["parser", "lemmatizer", "attribute_ruler", "tagger"])
+            except Exception:
+                self._nlp_en = None
+
+        self._nlp_xx = None
 
     @property
     def nlp(self):
+        if os.environ.get("RENDER_LOW_MEMORY") == "1":
+            return None
+        if self._nlp_en is None:
+            self._init_models()
         return self._nlp_en
 
     @property
     def nlp_xx(self):
-        if self._nlp_xx is None and os.environ.get("RENDER_LOW_MEMORY") != "1":
+        if os.environ.get("RENDER_LOW_MEMORY") == "1":
+            return None
+        if self._nlp_xx is None:
             try:
                 import xx_ent_wiki_sm
                 self._nlp_xx = xx_ent_wiki_sm.load()
             except Exception:
                 try:
+                    import spacy
                     self._nlp_xx = spacy.load("xx_ent_wiki_sm")
                 except Exception:
                     self._nlp_xx = None
@@ -61,6 +75,82 @@ class LocalNEREngine:
         """
         if not text or not text.strip():
             return []
+
+        # Zero-spaCy deterministic NER fast-path when RENDER_LOW_MEMORY=1
+        if os.environ.get("RENDER_LOW_MEMORY") == "1" or self._nlp_en is None:
+            results: List[Dict[str, Any]] = []
+            seen_spans = set()
+
+            # 1. Titled/honorific names
+            honorific_re = re.compile(
+                r"\b(?:Dr|Mr|Mrs|Ms|Prof|Shri|Smt|Kumari|Master|Miss)\.?[^\S\r\n]+[A-Z][a-zA-Z.]*(?:[^\S\r\n]+[A-Z][a-zA-Z.]*){0,3}",
+                re.IGNORECASE
+            )
+            for m in honorific_re.finditer(text):
+                ent_text = m.group(0).strip()
+                if (
+                    len(ent_text) >= 4
+                    and not is_clinical_term(ent_text)
+                    and not any(is_clinical_term(w) for w in ent_text.split())
+                ):
+                    seen_spans.add((m.start(), m.end(), "PATIENT_NAME"))
+                    results.append({
+                        "text": ent_text,
+                        "label": "PERSON",
+                        "category": "PATIENT_NAME",
+                        "start_char": m.start(),
+                        "end_char": m.end(),
+                    })
+
+            # 2. Label : Value name patterns
+            label_name_re = re.compile(
+                r"(?:Patient[^\S\r\n]*Name|Name|Pt\.?[^\S\r\n]*Name|Ref\.?[^\S\r\n]*By|Referred[^\S\r\n]*By|Consultant|Doctor|Physician)[^\S\r\n]*[:\-][^\S\r\n]*([A-Z][A-Za-z.]*(?:[^\S\r\n]+[A-Z][A-Za-z.]*){0,3})",
+                re.IGNORECASE
+            )
+            for m in label_name_re.finditer(text):
+                ent_text = m.group(1).strip()
+                start_c = m.start(1)
+                end_c = m.end(1)
+                if (
+                    len(ent_text) >= 3
+                    and not is_clinical_term(ent_text)
+                    and not any(is_clinical_term(w) for w in ent_text.split())
+                ):
+                    if not any(s <= start_c and end_c <= e and c == "PATIENT_NAME" for (s, e, c) in seen_spans):
+                        seen_spans.add((start_c, end_c, "PATIENT_NAME"))
+                        results.append({
+                            "text": ent_text,
+                            "label": "PERSON",
+                            "category": "PATIENT_NAME",
+                            "start_char": start_c,
+                            "end_char": end_c,
+                        })
+
+            # 3. Institutional phrases
+            inst_re = re.compile(
+                r"\b[A-Z][A-Za-z&.]*(?:[^\S\r\n]+(?:&|[A-Z][A-Za-z&.]*)){0,4}[^\S\r\n]+(?:Hospital|Hospitals|Clinic|Diagnostics|Imaging|Medical[^\S\r\n]+Centre|Medical[^\S\r\n]+Center|Healthcare|Laboratory|Labs|Pharmacy|Institute|Nursing[^\S\r\n]+Home)(?:[^\S\r\n]+(?:&|[A-Z][A-Za-z&.]*)){0,3}\b",
+                re.IGNORECASE
+            )
+            for m in inst_re.finditer(text):
+                ent_text = m.group(0).strip()
+                start_c = m.start()
+                end_c = m.end()
+                if (
+                    len(ent_text) >= 3
+                    and not is_clinical_term(ent_text)
+                    and not any(is_clinical_term(w) for w in ent_text.split())
+                ):
+                    if not any(s <= start_c and end_c <= e and c == "CLINIC_FACILITY" for (s, e, c) in seen_spans):
+                        seen_spans.add((start_c, end_c, "CLINIC_FACILITY"))
+                        results.append({
+                            "text": ent_text,
+                            "label": "ORG",
+                            "category": "CLINIC_FACILITY",
+                            "start_char": start_c,
+                            "end_char": end_c,
+                        })
+
+            return results
 
         models = []
         if self._nlp_en is not None:
@@ -173,3 +263,7 @@ class LocalNEREngine:
                         })
 
         return results
+
+
+MedicalNEREngine = LocalNEREngine
+

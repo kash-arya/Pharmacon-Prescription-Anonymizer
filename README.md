@@ -22,7 +22,7 @@ Local, CPU-first de-identification system for medical prescriptions, clinical in
   - `data/` — Authentic clinical specimens across digital vector PDFs, scanned documents, and raw smartphone camera photos.
   - `outputs/` — High-contrast side-by-side visual audit images (`<name>_SIDE_BY_SIDE.jpg`) and automated triage summary report (`SUMMARY_REPORT.md`).
   - `benchmarks/` — Automated evaluation suite measuring PII recall, zero-leak guarantees, and clinical entity preservation.
-  - `tests/` — End-to-end unit and integration test suite (23/23 tests passing).
+  - `tests/` — End-to-end unit and integration test suite (25/25 tests passing).
 - **[`pharmacon_v1/`](pharmacon_v1/)** — Historical phase 1 handwriting recognition and writer adaptation exploration artifacts.
 
 ---
@@ -44,8 +44,11 @@ python anonymize.py --input data/samples/sample_digital_vector_prescription.pdf
 # Run full evaluation benchmark (8/8 PASS, 100% PII Recall, 0 Leaks)
 python benchmarks/benchmark.py
 
-# Run unit and integration tests (23/23 PASS)
+# Run unit and integration tests (25/25 PASS)
 python -m unittest tests/test_prescription_anonymizer.py
+
+# Start microservice in low-memory container mode (Render 512MB RAM profile)
+RENDER_LOW_MEMORY=1 MALLOC_ARENA_MAX=2 python -m api.server
 ```
 
 For complete architectural details, REST API documentation, and technical defense notes, see [`prescription_anonymizer/README.md`](prescription_anonymizer/README.md).

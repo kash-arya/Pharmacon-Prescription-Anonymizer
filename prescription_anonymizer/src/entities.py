@@ -349,3 +349,7 @@ def is_whitelisted(text: str) -> bool:
     return any(rx.search(clean) for rx in _COMPILED_WHITELIST)
 
 
+is_clinical_term = is_whitelisted
+
+
+

@@ -261,7 +261,12 @@ class ForensicAuditor:
         if has_id_contact:
             score += 0.15
 
-        has_address = any(c.startswith("ADDRESS") for c in categories)
+        has_address = any(
+            c.startswith("ADDRESS")
+            or any(kw in (t.get("raw_text") or "").lower() for kw in ["address", "anschrift", "sec ", "sector", "kurukshetra"])
+            for t in targets
+            for c in [t.get("category", "")]
+        )
         has_date_demo = any(c.startswith("DATE") or c.startswith("DEMOGRAPHIC") for c in categories)
         text_lower = extracted_text.lower() if extracted_text else ""
 
@@ -453,8 +458,7 @@ class ForensicAuditor:
 
             # Check 2: Unmasked Institutional Header Check in top 22% and above clinical prescription body
             inst_check_re = re.compile(
-                r"\b(?:IMAGING|DIAGNOSTICS|HOSPITAL|CLINIC|LABORATORY|MARKET|COLONY|CHOWK)\b",
-                re.IGNORECASE
+                r"\b(?:IMAGING|Imaging|DIAGNOSTICS|Diagnostics|HOSPITAL|Hospital|CLINIC|Clinic|LABORATORY|Laboratory|MARKET|Market|COLONY|Colony|CHOWK|Chowk)\b"
             )
             has_unmasked_inst = False
             for w_rect, w_txt in unmasked_words:

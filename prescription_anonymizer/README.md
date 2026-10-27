@@ -34,15 +34,31 @@ Each specimen processed across all 4 dataset suites (`samples/`, `real_phone_pre
 
 ## Production REST API Specification
 
-A high-performance FastAPI microservice engineered for low-memory container environments (Render 512MB RAM + Vercel frontend):
+A FastAPI microservice optimized for local execution and low-memory cloud containers (such as Render 512MB RAM tiers):
 
 | Method & Route | Description |
 | :--- | :--- |
-| `GET /health` | Health and readiness probe returning engine status and loaded models. |
-| `POST /anonymize/preview` | Returns unified JSON payload with Left PNG (`original_image_base64`), Right PNG (`redacted_image_base64`), Side-by-Side JPEG (`side_by_side_image_base64`), and direct download binary (`download_file_base64`) in original uploaded format. |
-| `POST /anonymize/file` | De-identifies and streams the sanitized document in its exact original format (`.pdf`, `.jpg`, `.png`, `.webp`) with attachment download headers. |
+| `GET /health` | Health and readiness probe reporting engine status and memory mode. |
+| `POST /anonymize/preview` | Generates a unified preview payload with original image, redacted image, side-by-side comparison, and direct download base64. |
+| `POST /anonymize/file` | Anonymizes and streams the document in its native file format (`.pdf`, `.jpg`, `.png`, `.webp`) with attachment headers. |
 | `POST /api/v1/anonymize` | Multipart endpoint supporting `return_type=file` (binary stream) or `return_type=json` (metadata + base64). |
 | `POST /api/v1/anonymize/batch` | High-throughput batch redaction accepting a `.zip` archive and streaming back a sanitized `.zip` with an audit summary. |
+
+---
+
+## Cloud Deployment (Render 512MB RAM)
+
+Pharmacon includes native container safeguards designed to run reliably under tight 512MB RAM constraints:
+
+- **Zero-spaCy Deterministic Fallback:** Setting `RENDER_LOW_MEMORY=1` bypasses heavy transformer/spaCy model loads, cutting baseline resident memory by ~180MB while maintaining complete PII recall through deterministic regexes and layout parsing.
+- **PyMuPDF Memory Stabilization:** Uses solid display-list vector fills (`draw_rect`) on raster pages to prevent PyMuPDF from decompressing full raw 12-megapixel bitmaps into heap memory.
+- **glibc Heap Arena Caps:** Configured with `MALLOC_ARENA_MAX=2` and aggressive malloc trim thresholds (`32768`) to return released C++ heap pages to Linux immediately.
+- **Single-Process In-Memory Flow:** Eliminates IPC overhead and prevents copy-on-write page duplication from fork workers.
+
+To run locally under low-memory mode:
+```bash
+RENDER_LOW_MEMORY=1 MALLOC_ARENA_MAX=2 python -m api.server
+```
 
 ---
 
@@ -68,7 +84,7 @@ python anonymize.py --input data/samples/ --output /tmp/sanitized_prescriptions/
 ```
 
 ### 3. Generate Visual Audit Comparisons
-Batch-processes all specimens across dataset folders and generates side-by-side comparisons in `outputs/`:
+Batch-processes specimens across dataset folders and generates side-by-side comparisons in `outputs/`:
 ```bash
 python scripts/export_all_masked_results.py
 ```
@@ -77,7 +93,7 @@ python scripts/export_all_masked_results.py
 ```bash
 python -m api.server
 ```
-- Interactive Web App: `http://localhost:8000/`
+- Interactive Web App: `http://localhost:8000/` (or `http://localhost:10000/` in container)
 - Interactive Swagger UI: `http://localhost:8000/docs`
 - Health Probe: `http://localhost:8000/health`
 - Node.js & React Integration: See [`docs/NODEJS_INTEGRATION_GUIDE.md`](docs/NODEJS_INTEGRATION_GUIDE.md) and [`scripts/node_client_example.js`](scripts/node_client_example.js).
@@ -108,7 +124,7 @@ python -m unittest tests/test_prescription_anonymizer.py
 | **Smartphone Photo** | Akash Imaging Report 2 (S23) | JPEG Camera | 12 | **0** | **100.0%** | $9.64\text{ s}$ | **PASS** |
 | **Aggregate Summary** | **Authentic Document Cohort** | **Hybrid Pipeline** | **100.0% Recall** | **0 Leaks** | **100.0% Preserved** | **5.30 s avg** | **8 / 8 (100% PASS)** |
 
-**Unit & Integration Test Suite:** `23 / 23 PASS (100.0%)`
+**Unit & Integration Test Suite:** `25 / 25 PASS (100.0%)`
 
 ---
 

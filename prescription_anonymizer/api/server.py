@@ -205,64 +205,19 @@ def _purge_system_memory():
         image_engine._last_extracted_text = ""
 
 
-def _run_isolated_redaction_task(fmt: str, input_path: str, output_path: str, jurisdiction: str, temp_dir: str):
-    """
-    Executes redaction pipeline. When RENDER_LOW_MEMORY=1, executes inside a forked child
-    subprocess that writes results to a temp JSON file and terminates via os._exit(0),
-    guaranteeing 100% C++ heap memory reclamation by the Linux kernel.
-    """
-    is_low_mem = os.environ.get("RENDER_LOW_MEMORY") == "1"
-    if not is_low_mem:
-        if fmt == "VECTOR_DIGITAL":
-            return "Native Vector Stream Redactor (PyMuPDF)", vector_engine.redact(input_path, output_path, jurisdiction=jurisdiction)
-        else:
-            return "Scanned Raster Image Redactor (Local OCR Anchor Engine)", image_engine.redact(input_path, output_path, jurisdiction=jurisdiction)
-
-    import multiprocessing
-    ctx = multiprocessing.get_context("fork")
-    meta_json_path = os.path.join(temp_dir, "_redaction_isolated_result.json")
-
-    def _child():
-        try:
-            if fmt == "VECTOR_DIGITAL":
-                e_name = "Native Vector Stream Redactor (PyMuPDF)"
-                rep = vector_engine.redact(input_path, output_path, jurisdiction=jurisdiction)
-            else:
-                e_name = "Scanned Raster Image Redactor (Local OCR Anchor Engine)"
-                rep = image_engine.redact(input_path, output_path, jurisdiction=jurisdiction)
-            with open(meta_json_path, "w", encoding="utf-8") as f:
-                json.dump({"success": True, "engine": e_name, "report": rep}, f)
-        except Exception as ex:
-            with open(meta_json_path, "w", encoding="utf-8") as f:
-                json.dump({"success": False, "error": str(ex)}, f)
-        finally:
-            os._exit(0)
-
-    p = ctx.Process(target=_child)
-    p.start()
-    p.join(timeout=180)
-    if p.is_alive():
-        p.kill()
-        p.join()
-
-    _purge_system_memory()
-
-    if not os.path.exists(meta_json_path):
-        raise RuntimeError("Isolated redaction worker exited unexpectedly without writing results.")
-
-    with open(meta_json_path, "r", encoding="utf-8") as f:
-        meta = json.load(f)
-
-    if not meta.get("success"):
-        raise RuntimeError(f"Redaction execution error in isolated worker: {meta.get('error')}")
-
-    return meta["engine"], meta["report"]
+def _run_redaction(fmt: str, input_path: str, output_path: str, jurisdiction: str) -> Tuple[str, Dict[str, Any]]:
+    """Executes redaction pipeline directly in-process (single process)."""
+    if fmt == "VECTOR_DIGITAL":
+        return "Native Vector Stream Redactor (PyMuPDF)", vector_engine.redact(input_path, output_path, jurisdiction=jurisdiction)
+    else:
+        return "Scanned Raster Image Redactor (Local OCR Anchor Engine)", image_engine.redact(input_path, output_path, jurisdiction=jurisdiction)
 
 
 def _render_page_to_pil(file_path: str, page_num: int = 0, dpi: int = 150, max_height: Optional[int] = None) -> Image.Image:
     """Renders a single page of a PDF or loads an image into a clean RGB PIL Image."""
     _, ext = os.path.splitext(file_path)
     ext_lower = ext.lower()
+    is_low_mem = os.environ.get("RENDER_LOW_MEMORY") == "1"
     img = None
     if ext_lower == ".pdf":
         doc = pymupdf.open(file_path)
@@ -279,14 +234,21 @@ def _render_page_to_pil(file_path: str, page_num: int = 0, dpi: int = 150, max_h
                     img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
             finally:
                 del pix
+                try:
+                    pymupdf.TOOLS.store_shrink(100)
+                except Exception:
+                    pass
         finally:
             doc.close()
+            try:
+                pymupdf.TOOLS.store_shrink(100)
+            except Exception:
+                pass
     else:
-        is_low_mem = os.environ.get("RENDER_LOW_MEMORY") == "1"
         try:
             with Image.open(file_path) as im:
-                if is_low_mem and max(im.size) > 1200:
-                    im.draft("RGB", (max_height or 850, max_height or 850))
+                if is_low_mem and max(im.size) > 700:
+                    im.draft("RGB", (max_height or 700, max_height or 700))
                 img = im.convert("RGB")
         except Exception:
             doc = pymupdf.open(file_path)
@@ -299,13 +261,22 @@ def _render_page_to_pil(file_path: str, page_num: int = 0, dpi: int = 150, max_h
                         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
                 finally:
                     del pix
+                    try:
+                        pymupdf.TOOLS.store_shrink(100)
+                    except Exception:
+                        pass
             finally:
                 doc.close()
+                try:
+                    pymupdf.TOOLS.store_shrink(100)
+                except Exception:
+                    pass
 
     if img is not None and max_height is not None and img.height > max_height:
         scale = float(max_height) / img.height
         new_w = max(1, int(img.width * scale))
-        img = img.resize((new_w, max_height), Image.Resampling.LANCZOS)
+        resample_mode = Image.Resampling.BILINEAR if is_low_mem else Image.Resampling.LANCZOS
+        img = img.resize((new_w, max_height), resample_mode)
 
     return img
 
@@ -335,13 +306,14 @@ def _generate_side_by_side_base64(
     Right: Anonymized Output with Triage Status & Confidence Badge
     """
     is_low_mem = os.environ.get("RENDER_LOW_MEMORY") == "1"
-    max_h_limit = 850 if is_low_mem else 1200
-    target_h = max(600 if is_low_mem else 700, min(max_h_limit, max(orig_img.height, red_img.height)))
+    max_h_limit = 700 if is_low_mem else 1200
+    target_h = max(450 if is_low_mem else 700, min(max_h_limit, max(orig_img.height, red_img.height)))
     w_orig = max(1, int(orig_img.width * (target_h / orig_img.height)))
     w_red = max(1, int(red_img.width * (target_h / red_img.height)))
 
-    orig_scaled = orig_img.resize((w_orig, target_h), Image.Resampling.LANCZOS)
-    red_scaled = red_img.resize((w_red, target_h), Image.Resampling.LANCZOS)
+    resample_mode = Image.Resampling.BILINEAR if is_low_mem else Image.Resampling.LANCZOS
+    orig_scaled = orig_img.resize((w_orig, target_h), resample_mode)
+    red_scaled = red_img.resize((w_red, target_h), resample_mode)
 
     header_h = 55
     divider_w = 4
@@ -379,7 +351,7 @@ def _generate_side_by_side_base64(
     canvas.paste(red_scaled, (rx0, header_h))
 
     buf = io.BytesIO()
-    canvas.save(buf, format="JPEG", quality=80 if is_low_mem else 85)
+    canvas.save(buf, format="JPEG", quality=75 if is_low_mem else 85)
     b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
     del canvas, orig_scaled, red_scaled
     return f"data:image/jpeg;base64,{b64}"
@@ -430,6 +402,7 @@ async def health_check():
     }
 
 
+@app.post("/anonymize", tags=["Redaction"])
 @app.post("/api/v1/anonymize", tags=["Redaction"])
 async def anonymize_prescription(
     background_tasks: BackgroundTasks,
@@ -474,84 +447,64 @@ async def anonymize_prescription(
             raise HTTPException(status_code=400, detail="Uploaded file is empty (0 bytes).")
         with open(input_path, "wb") as f:
             f.write(content)
-    except HTTPException:
-        _cleanup_dir(temp_dir)
-        raise
-    except Exception as e:
-        _cleanup_dir(temp_dir)
-        raise HTTPException(status_code=500, detail=f"Failed to read uploaded file: {str(e)}")
 
-    # Stage 1: Document Structure Inspection
-    try:
         structure = inspect_pdf_structure(input_path)
         fmt = structure["format_type"]
-    except Exception as e:
-        _cleanup_dir(temp_dir)
-        raise HTTPException(status_code=422, detail=f"Failed to parse document structure: {str(e)}")
 
-    # Stage 2: Redaction Routing & Execution
-    try:
-        engine_name, report = _run_isolated_redaction_task(fmt, input_path, output_path, jurisdiction, temp_dir)
-    except Exception as e:
-        _cleanup_dir(temp_dir)
-        raise HTTPException(status_code=500, detail=f"Redaction execution error: {str(e)}")
+        engine_name, report = _run_redaction(fmt, input_path, output_path, jurisdiction)
 
-    redacted_count = report.get("total_entities_redacted", len(report.get("redacted_targets", [])))
-    active_jurisdiction = report.get("jurisdiction", "GLOBAL")
-    conf_score = float(report.get("confidence_score", 0.96))
-    triage_stat = str(report.get("triage_status", "AUTO_APPROVED"))
-    reasons = report.get("review_reasons", [])
-    media_type = MIME_MAP.get(ext_lower, "application/octet-stream")
+        redacted_count = report.get("total_entities_redacted", len(report.get("redacted_targets", [])))
+        active_jurisdiction = report.get("jurisdiction", "GLOBAL")
+        conf_score = float(report.get("confidence_score", 0.96))
+        triage_stat = str(report.get("triage_status", "AUTO_APPROVED"))
+        reasons = report.get("review_reasons", [])
+        media_type = MIME_MAP.get(ext_lower, "application/octet-stream")
 
-    # Return Mode A: Stream sanitized file binary
-    if return_type == "file":
-        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
-            _cleanup_dir(temp_dir)
-            _purge_system_memory()
-            raise HTTPException(status_code=500, detail="Sanitized file output was not generated or is empty.")
-        with open(output_path, "rb") as out_f:
-            file_bytes = out_f.read()
-        _cleanup_dir(temp_dir)
-        _purge_system_memory()
-        return Response(
-            content=file_bytes,
-            media_type=media_type,
-            headers={
-                "Content-Disposition": f'attachment; filename="{output_filename}"',
-                "X-Redacted-Count": str(redacted_count),
-                "X-Format-Type": fmt,
-                "X-Jurisdiction": active_jurisdiction,
-                "X-Engine": engine_name,
-                "X-Confidence-Score": str(conf_score),
-                "X-Triage-Status": triage_stat
-            }
-        )
-
-    # Return Mode B: Return JSON metadata with embedded Base64 output
-    try:
         if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
             raise HTTPException(status_code=500, detail="Sanitized file output was not generated or is empty.")
+
+        # Return Mode A: Stream sanitized file binary
+        if return_type == "file":
+            with open(output_path, "rb") as out_f:
+                file_bytes = out_f.read()
+            return Response(
+                content=file_bytes,
+                media_type=media_type,
+                headers={
+                    "Content-Disposition": f'attachment; filename="{output_filename}"',
+                    "X-Redacted-Count": str(redacted_count),
+                    "X-Format-Type": fmt,
+                    "X-Jurisdiction": active_jurisdiction,
+                    "X-Engine": engine_name,
+                    "X-Confidence-Score": str(conf_score),
+                    "X-Triage-Status": triage_stat
+                }
+            )
+
+        # Return Mode B: Return JSON metadata with embedded Base64 output
         with open(output_path, "rb") as out_f:
             out_bytes = out_f.read()
         b64_str = base64.b64encode(out_bytes).decode("utf-8")
+        del out_bytes
         data_uri = f"data:{media_type};base64,{b64_str}"
+        del b64_str
+
+        return JSONResponse(content={
+            "status": "SUCCESS",
+            "filename": output_filename,
+            "format_type": fmt,
+            "jurisdiction": active_jurisdiction,
+            "engine": engine_name,
+            "total_entities_redacted": redacted_count,
+            "redacted_targets": report.get("redacted_targets", []),
+            "data_uri": data_uri,
+            "confidence_score": conf_score,
+            "triage_status": triage_stat,
+            "review_reasons": reasons
+        })
     finally:
         _cleanup_dir(temp_dir)
         _purge_system_memory()
-
-    return JSONResponse(content={
-        "status": "SUCCESS",
-        "filename": output_filename,
-        "format_type": fmt,
-        "jurisdiction": active_jurisdiction,
-        "engine": engine_name,
-        "total_entities_redacted": redacted_count,
-        "redacted_targets": report.get("redacted_targets", []),
-        "data_uri": data_uri,
-        "confidence_score": conf_score,
-        "triage_status": triage_stat,
-        "review_reasons": reasons
-    })
 
 
 @app.post("/anonymize/file", tags=["Redaction"])
@@ -592,55 +545,40 @@ async def anonymize_prescription_file_download(
             raise HTTPException(status_code=400, detail="Uploaded file is empty (0 bytes).")
         with open(input_path, "wb") as f:
             f.write(content)
-    except HTTPException:
-        _cleanup_dir(temp_dir)
-        raise
-    except Exception as e:
-        _cleanup_dir(temp_dir)
-        raise HTTPException(status_code=500, detail=f"Failed to read uploaded file: {str(e)}")
 
-    try:
         structure = inspect_pdf_structure(input_path)
         fmt = structure["format_type"]
-    except Exception as e:
-        _cleanup_dir(temp_dir)
-        raise HTTPException(status_code=422, detail=f"Failed to parse document structure: {str(e)}")
 
-    try:
-        engine_name, report = _run_isolated_redaction_task(fmt, input_path, output_path, jurisdiction, temp_dir)
-    except Exception as e:
-        _cleanup_dir(temp_dir)
-        raise HTTPException(status_code=500, detail=f"Redaction execution error: {str(e)}")
+        engine_name, report = _run_redaction(fmt, input_path, output_path, jurisdiction)
 
-    redacted_count = report.get("total_entities_redacted", len(report.get("redacted_targets", [])))
-    active_jurisdiction = report.get("jurisdiction", "GLOBAL")
-    conf_score = float(report.get("confidence_score", 0.96))
-    triage_stat = str(report.get("triage_status", "AUTO_APPROVED"))
-    media_type = MIME_MAP.get(ext_lower, "application/octet-stream")
+        redacted_count = report.get("total_entities_redacted", len(report.get("redacted_targets", [])))
+        active_jurisdiction = report.get("jurisdiction", "GLOBAL")
+        conf_score = float(report.get("confidence_score", 0.96))
+        triage_stat = str(report.get("triage_status", "AUTO_APPROVED"))
+        media_type = MIME_MAP.get(ext_lower, "application/octet-stream")
 
-    if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+            raise HTTPException(status_code=500, detail="Sanitized file output was not generated or is empty.")
+
+        with open(output_path, "rb") as out_f:
+            file_bytes = out_f.read()
+
+        return Response(
+            content=file_bytes,
+            media_type=media_type,
+            headers={
+                "Content-Disposition": f'attachment; filename="{output_filename}"',
+                "X-Redacted-Count": str(redacted_count),
+                "X-Format-Type": fmt,
+                "X-Jurisdiction": active_jurisdiction,
+                "X-Engine": engine_name,
+                "X-Confidence-Score": str(conf_score),
+                "X-Triage-Status": triage_stat
+            }
+        )
+    finally:
         _cleanup_dir(temp_dir)
         _purge_system_memory()
-        raise HTTPException(status_code=500, detail="Sanitized file output was not generated or is empty.")
-
-    with open(output_path, "rb") as out_f:
-        file_bytes = out_f.read()
-    _cleanup_dir(temp_dir)
-    _purge_system_memory()
-
-    return Response(
-        content=file_bytes,
-        media_type=media_type,
-        headers={
-            "Content-Disposition": f'attachment; filename="{output_filename}"',
-            "X-Redacted-Count": str(redacted_count),
-            "X-Format-Type": fmt,
-            "X-Jurisdiction": active_jurisdiction,
-            "X-Engine": engine_name,
-            "X-Confidence-Score": str(conf_score),
-            "X-Triage-Status": triage_stat
-        }
-    )
 
 
 @app.post("/anonymize/preview", response_model=PreviewResponse, tags=["Redaction"])
@@ -656,8 +594,8 @@ async def anonymize_prescription_preview(
 ):
     """
     De-identifies a prescription and generates a unified preview payload for the Vercel frontend:
-    - original_image_base64: PNG Base64 Data URI of original document for the Left pane
-    - redacted_image_base64: PNG Base64 Data URI of redacted document for the Right pane
+    - original_image_base64: PNG/JPEG Base64 Data URI of original document for the Left pane
+    - redacted_image_base64: PNG/JPEG Base64 Data URI of redacted document for the Right pane
     - side_by_side_image_base64: JPEG Base64 Data URI with comparative audit banner
     - download_file_base64: Exact anonymized binary in original format (.pdf/.jpg/.png/.webp)
       allowing one-click instant client-side downloads without a second request
@@ -687,58 +625,41 @@ async def anonymize_prescription_preview(
             raise HTTPException(status_code=400, detail="Uploaded file is empty (0 bytes).")
         with open(input_path, "wb") as f:
             f.write(content)
-    except HTTPException:
-        _cleanup_dir(temp_dir)
-        raise
-    except Exception as e:
-        _cleanup_dir(temp_dir)
-        raise HTTPException(status_code=500, detail=f"Failed to read uploaded file: {str(e)}")
 
-    try:
         structure = inspect_pdf_structure(input_path)
         fmt = structure["format_type"]
-    except Exception as e:
-        _cleanup_dir(temp_dir)
-        raise HTTPException(status_code=422, detail=f"Failed to parse document structure: {str(e)}")
 
-    try:
-        engine_name, report = _run_isolated_redaction_task(fmt, input_path, output_path, jurisdiction, temp_dir)
-    except Exception as e:
-        _cleanup_dir(temp_dir)
-        raise HTTPException(status_code=500, detail=f"Redaction execution error: {str(e)}")
+        engine_name, report = _run_redaction(fmt, input_path, output_path, jurisdiction)
 
-    redacted_count = report.get("total_entities_redacted", len(report.get("redacted_targets", [])))
-    active_jurisdiction = report.get("jurisdiction", "GLOBAL")
-    conf_score = float(report.get("confidence_score", 0.96))
-    triage_stat = str(report.get("triage_status", "AUTO_APPROVED"))
-    reasons = report.get("review_reasons", [])
-    mime_type = MIME_MAP.get(ext_lower, "application/octet-stream")
+        redacted_count = report.get("total_entities_redacted", len(report.get("redacted_targets", [])))
+        active_jurisdiction = report.get("jurisdiction", "GLOBAL")
+        conf_score = float(report.get("confidence_score", 0.96))
+        triage_stat = str(report.get("triage_status", "AUTO_APPROVED"))
+        reasons = report.get("review_reasons", [])
+        mime_type = MIME_MAP.get(ext_lower, "application/octet-stream")
 
-    is_low_mem = os.environ.get("RENDER_LOW_MEMORY") == "1"
-    preview_dpi = 96 if is_low_mem else 150
-    preview_max_h = 850 if is_low_mem else None
-    preview_fmt = "JPEG" if is_low_mem else "PNG"
-    preview_quality = 80 if is_low_mem else 85
+        is_low_mem = os.environ.get("RENDER_LOW_MEMORY") == "1"
+        preview_dpi = 80 if is_low_mem else 150
+        preview_max_h = 700 if is_low_mem else None
+        preview_fmt = "JPEG" if is_low_mem else "PNG"
+        preview_quality = 72 if is_low_mem else 85
 
-    gc.collect()
-    try:
-        import ctypes
-        ctypes.CDLL("libc.so.6").malloc_trim(0)
-    except Exception:
-        pass
-
-    try:
         orig_pil = _render_page_to_pil(input_path, page_num=page, dpi=preview_dpi, max_height=preview_max_h)
         red_pil = _render_page_to_pil(output_path, page_num=page, dpi=preview_dpi, max_height=preview_max_h)
 
-        orig_preview_b64 = _pil_to_base64_data_uri(orig_pil, format=preview_fmt, quality=preview_quality)
-        red_preview_b64 = _pil_to_base64_data_uri(red_pil, format=preview_fmt, quality=preview_quality)
         side_by_side_b64 = _generate_side_by_side_base64(
             orig_pil, red_pil,
             triage_status=triage_stat,
             confidence=conf_score
         )
+        orig_preview_b64 = _pil_to_base64_data_uri(orig_pil, format=preview_fmt, quality=preview_quality)
+        red_preview_b64 = _pil_to_base64_data_uri(red_pil, format=preview_fmt, quality=preview_quality)
         del orig_pil, red_pil
+
+        try:
+            pymupdf.TOOLS.store_shrink(100)
+        except Exception:
+            pass
         gc.collect()
         try:
             import ctypes
@@ -746,46 +667,57 @@ async def anonymize_prescription_preview(
         except Exception:
             pass
 
-        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
-            raise RuntimeError(f"Redacted output file is missing or empty at {output_path}")
-        with open(output_path, "rb") as out_f:
-            file_bytes = out_f.read()
-        file_b64_str = base64.b64encode(file_bytes).decode("utf-8")
-        download_b64 = f"data:{mime_type};base64,{file_b64_str}"
-        del file_bytes
+        if is_low_mem and ext_lower in {".jpg", ".jpeg", ".png", ".webp"}:
+            download_b64 = red_preview_b64
+        else:
+            if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+                raise RuntimeError(f"Redacted output file is missing or empty at {output_path}")
+            with open(output_path, "rb") as out_f:
+                file_bytes = out_f.read()
+            file_b64_str = base64.b64encode(file_bytes).decode("utf-8")
+            del file_bytes
+            download_b64 = f"data:{mime_type};base64,{file_b64_str}"
+            del file_b64_str
+
+        try:
+            pymupdf.TOOLS.store_shrink(100)
+        except Exception:
+            pass
         gc.collect()
-    except Exception as e:
-        _cleanup_dir(temp_dir)
-        _purge_system_memory()
-        raise HTTPException(status_code=500, detail=f"Failed to render preview images: {str(e)}")
+        try:
+            import ctypes
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except Exception:
+            pass
+
+        return JSONResponse(content={
+            "status": "SUCCESS",
+            "filename": filename,
+            "anonymized_filename": output_filename,
+            "mime_type": mime_type,
+            "format_type": fmt,
+            "jurisdiction": active_jurisdiction,
+            "engine": engine_name,
+            "total_entities_redacted": redacted_count,
+            "confidence_score": conf_score,
+            "triage_status": triage_stat,
+            "review_reasons": reasons,
+            "original_image_base64": orig_preview_b64,
+            "redacted_image_base64": red_preview_b64,
+            "side_by_side_image_base64": side_by_side_b64,
+            "download_file_base64": download_b64,
+            "redacted_targets": report.get("redacted_targets", []),
+            # Legacy backward-compatibility aliases
+            "original_image": orig_preview_b64,
+            "redacted_image": red_preview_b64,
+            "data_uri": download_b64
+        })
     finally:
         _cleanup_dir(temp_dir)
         _purge_system_memory()
 
-    return JSONResponse(content={
-        "status": "SUCCESS",
-        "filename": filename,
-        "anonymized_filename": output_filename,
-        "mime_type": mime_type,
-        "format_type": fmt,
-        "jurisdiction": active_jurisdiction,
-        "engine": engine_name,
-        "total_entities_redacted": redacted_count,
-        "confidence_score": conf_score,
-        "triage_status": triage_stat,
-        "review_reasons": reasons,
-        "original_image_base64": orig_preview_b64,
-        "redacted_image_base64": red_preview_b64,
-        "side_by_side_image_base64": side_by_side_b64,
-        "download_file_base64": download_b64,
-        "redacted_targets": report.get("redacted_targets", []),
-        # Legacy backward-compatibility aliases
-        "original_image": orig_preview_b64,
-        "redacted_image": red_preview_b64,
-        "data_uri": download_b64
-    })
 
-
+@app.post("/anonymize/batch", tags=["Redaction"])
 @app.post("/api/v1/anonymize/batch", tags=["Redaction"])
 async def anonymize_batch_archive(
     background_tasks: BackgroundTasks,
@@ -814,136 +746,127 @@ async def anonymize_batch_archive(
     archive_output_path = os.path.join(temp_dir, f"anonymized_batch_{req_id[:8]}.zip")
 
     try:
-        content = await file.read()
-        if not content:
-            raise HTTPException(status_code=400, detail="Uploaded zip archive is empty (0 bytes).")
-        with open(archive_input_path, "wb") as f:
-            f.write(content)
-        with zipfile.ZipFile(archive_input_path, "r") as zf:
-            for member in zf.infolist():
-                # Prevent Zip-Slip directory traversal vulnerability
-                resolved_target = os.path.abspath(os.path.join(in_extract_dir, member.filename))
-                if not (resolved_target == os.path.abspath(in_extract_dir) or resolved_target.startswith(os.path.abspath(in_extract_dir) + os.sep)):
-                    raise HTTPException(status_code=400, detail=f"Archive contains illegal path (Zip-Slip attempt): {member.filename}")
-            zf.extractall(in_extract_dir)
-    except HTTPException:
-        _cleanup_dir(temp_dir)
-        raise
-    except zipfile.BadZipFile:
-        _cleanup_dir(temp_dir)
-        raise HTTPException(status_code=400, detail="Invalid or corrupt ZIP archive.")
-    except Exception as e:
-        _cleanup_dir(temp_dir)
-        raise HTTPException(status_code=500, detail=f"Failed to extract ZIP archive: {str(e)}")
-
-    found_files = []
-    for root_dir, _, filenames in os.walk(in_extract_dir):
-        for fname in filenames:
-            if fname.startswith(".") or "__MACOSX" in root_dir:
-                continue
-            ext = os.path.splitext(fname)[1].lower()
-            if ext in SUPPORTED_EXTENSIONS:
-                full_p = os.path.join(root_dir, fname)
-                rel_p = os.path.relpath(full_p, in_extract_dir)
-                found_files.append((full_p, rel_p, fname, ext))
-
-    if not found_files:
-        _cleanup_dir(temp_dir)
-        raise HTTPException(
-            status_code=400,
-            detail=f"No supported prescription files found in archive. Supported formats: {sorted(list(SUPPORTED_EXTENSIONS))}"
-        )
-
-    batch_reports = []
-    total_redactions = 0
-
-    # Detect filename collisions across subdirectories
-    name_counts: Dict[str, int] = {}
-    for full_p, rel_p, fname, ext in found_files:
-        base_cand = f"{os.path.splitext(fname)[0]}_anonymized{ext}"
-        name_counts[base_cand] = name_counts.get(base_cand, 0) + 1
-
-    for full_p, rel_p, fname, ext in found_files:
-        name_no_ext = os.path.splitext(fname)[0]
-        flat_name = f"{name_no_ext}_anonymized{ext}"
-
-        # If collision exists across folders, preserve subfolder path; keep flat when unique
-        if name_counts[flat_name] > 1:
-            rel_dir = os.path.dirname(rel_p)
-            out_fname = os.path.join(rel_dir, flat_name) if rel_dir else flat_name
-        else:
-            out_fname = flat_name
-
-        out_file_path = os.path.join(out_redact_dir, out_fname)
-        os.makedirs(os.path.dirname(out_file_path), exist_ok=True)
-
         try:
-            structure = inspect_pdf_structure(full_p)
-            fmt = structure["format_type"]
-            if fmt == "VECTOR_DIGITAL":
-                engine_name = "Native Vector Stream Redactor (PyMuPDF)"
-                rep = vector_engine.redact(full_p, out_file_path, jurisdiction=jurisdiction)
+            content = await file.read()
+            if not content:
+                raise HTTPException(status_code=400, detail="Uploaded zip archive is empty (0 bytes).")
+            with open(archive_input_path, "wb") as f:
+                f.write(content)
+            with zipfile.ZipFile(archive_input_path, "r") as zf:
+                for member in zf.infolist():
+                    # Prevent Zip-Slip directory traversal vulnerability
+                    resolved_target = os.path.abspath(os.path.join(in_extract_dir, member.filename))
+                    if not (resolved_target == os.path.abspath(in_extract_dir) or resolved_target.startswith(os.path.abspath(in_extract_dir) + os.sep)):
+                        raise HTTPException(status_code=400, detail=f"Archive contains illegal path (Zip-Slip attempt): {member.filename}")
+                zf.extractall(in_extract_dir)
+        except HTTPException:
+            raise
+        except zipfile.BadZipFile:
+            raise HTTPException(status_code=400, detail="Invalid or corrupt ZIP archive.")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to extract ZIP archive: {str(e)}")
+
+        found_files = []
+        for root_dir, _, filenames in os.walk(in_extract_dir):
+            for fname in filenames:
+                if fname.startswith(".") or "__MACOSX" in root_dir:
+                    continue
+                ext = os.path.splitext(fname)[1].lower()
+                if ext in SUPPORTED_EXTENSIONS:
+                    full_p = os.path.join(root_dir, fname)
+                    rel_p = os.path.relpath(full_p, in_extract_dir)
+                    found_files.append((full_p, rel_p, fname, ext))
+
+        if not found_files:
+            raise HTTPException(
+                status_code=400,
+                detail=f"No supported prescription files found in archive. Supported formats: {sorted(list(SUPPORTED_EXTENSIONS))}"
+            )
+
+        batch_reports = []
+        total_redactions = 0
+
+        # Detect filename collisions across subdirectories
+        name_counts: Dict[str, int] = {}
+        for full_p, rel_p, fname, ext in found_files:
+            base_cand = f"{os.path.splitext(fname)[0]}_anonymized{ext}"
+            name_counts[base_cand] = name_counts.get(base_cand, 0) + 1
+
+        for full_p, rel_p, fname, ext in found_files:
+            name_no_ext = os.path.splitext(fname)[0]
+            flat_name = f"{name_no_ext}_anonymized{ext}"
+
+            # If collision exists across folders, preserve subfolder path; keep flat when unique
+            if name_counts[flat_name] > 1:
+                rel_dir = os.path.dirname(rel_p)
+                out_fname = os.path.join(rel_dir, flat_name) if rel_dir else flat_name
             else:
-                engine_name = "Scanned Raster Image Redactor (Local OCR Anchor Engine)"
-                rep = image_engine.redact(full_p, out_file_path, jurisdiction=jurisdiction)
+                out_fname = flat_name
 
-            cnt = rep.get("total_entities_redacted", len(rep.get("redacted_targets", [])))
-            doc_jur = rep.get("jurisdiction", "GLOBAL")
-            total_redactions += cnt
-            batch_reports.append({
-                "original_file": rel_p,
-                "sanitized_file": out_fname,
-                "status": "SUCCESS",
-                "format_type": fmt,
-                "jurisdiction": doc_jur,
-                "engine": engine_name,
-                "entities_redacted": cnt
-            })
-        except Exception as err:
-            batch_reports.append({
-                "original_file": rel_p,
-                "status": "ERROR",
-                "error": str(err)
-            })
+            out_file_path = os.path.join(out_redact_dir, out_fname)
+            os.makedirs(os.path.dirname(out_file_path), exist_ok=True)
 
-    summary_data = {
-        "service": "Pharmacon Medical Prescription Anonymizer",
-        "version": "2.0.0",
-        "total_documents": len(found_files),
-        "successful_redactions": len([r for r in batch_reports if r.get("status") == "SUCCESS"]),
-        "total_entities_redacted": total_redactions,
-        "files": batch_reports
-    }
-    summary_json_path = os.path.join(out_redact_dir, "batch_audit_summary.json")
-    with open(summary_json_path, "w", encoding="utf-8") as jf:
-        json.dump(summary_data, jf, indent=2)
+            try:
+                structure = inspect_pdf_structure(full_p)
+                fmt = structure["format_type"]
+                engine_name, rep = _run_redaction(fmt, full_p, out_file_path, jurisdiction)
 
-    with zipfile.ZipFile(archive_output_path, "w", compression=zipfile.ZIP_DEFLATED) as out_zf:
-        for root_dir, _, filenames in os.walk(out_redact_dir):
-            for fn in filenames:
-                file_to_zip = os.path.join(root_dir, fn)
-                arcname = os.path.relpath(file_to_zip, out_redact_dir)
-                out_zf.write(file_to_zip, arcname)
+                cnt = rep.get("total_entities_redacted", len(rep.get("redacted_targets", [])))
+                doc_jur = rep.get("jurisdiction", "GLOBAL")
+                total_redactions += cnt
+                batch_reports.append({
+                    "original_file": rel_p,
+                    "sanitized_file": out_fname,
+                    "status": "SUCCESS",
+                    "format_type": fmt,
+                    "jurisdiction": doc_jur,
+                    "engine": engine_name,
+                    "entities_redacted": cnt
+                })
+            except Exception as err:
+                batch_reports.append({
+                    "original_file": rel_p,
+                    "status": "ERROR",
+                    "error": str(err)
+                })
 
-    if not os.path.exists(archive_output_path) or os.path.getsize(archive_output_path) == 0:
+        summary_data = {
+            "service": "Pharmacon Medical Prescription Anonymizer",
+            "version": "2.0.0",
+            "total_documents": len(found_files),
+            "successful_redactions": len([r for r in batch_reports if r.get("status") == "SUCCESS"]),
+            "total_entities_redacted": total_redactions,
+            "files": batch_reports
+        }
+        summary_json_path = os.path.join(out_redact_dir, "batch_audit_summary.json")
+        with open(summary_json_path, "w", encoding="utf-8") as jf:
+            json.dump(summary_data, jf, indent=2)
+
+        with zipfile.ZipFile(archive_output_path, "w", compression=zipfile.ZIP_DEFLATED) as out_zf:
+            for root_dir, _, filenames in os.walk(out_redact_dir):
+                for fn in filenames:
+                    file_to_zip = os.path.join(root_dir, fn)
+                    arcname = os.path.relpath(file_to_zip, out_redact_dir)
+                    out_zf.write(file_to_zip, arcname)
+
+        if not os.path.exists(archive_output_path) or os.path.getsize(archive_output_path) == 0:
+            raise HTTPException(status_code=500, detail="Batch output archive could not be generated.")
+
+        with open(archive_output_path, "rb") as azf:
+            zip_bytes = azf.read()
+
+        return Response(
+            content=zip_bytes,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{os.path.basename(archive_output_path)}"',
+                "X-Total-Documents": str(len(found_files)),
+                "X-Total-Entities-Redacted": str(total_redactions)
+            }
+        )
+    finally:
         _cleanup_dir(temp_dir)
         _purge_system_memory()
-        raise HTTPException(status_code=500, detail="Batch output archive could not be generated.")
-
-    with open(archive_output_path, "rb") as azf:
-        zip_bytes = azf.read()
-    _cleanup_dir(temp_dir)
-    _purge_system_memory()
-
-    return Response(
-        content=zip_bytes,
-        media_type="application/zip",
-        headers={
-            "Content-Disposition": f'attachment; filename="{os.path.basename(archive_output_path)}"',
-            "X-Total-Documents": str(len(found_files)),
-            "X-Total-Entities-Redacted": str(total_redactions)
-        }
-    )
 
 
 if __name__ == "__main__":
