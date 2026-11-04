@@ -173,7 +173,7 @@ class LocalImageRedactor:
         max_pt = max(page.rect.width, page.rect.height)
         is_low_mem = os.environ.get("RENDER_LOW_MEMORY") == "1"
         if is_low_mem:
-            effective_dpi = 130
+            effective_dpi = 135
         else:
             if max_pt < 550:
                 effective_dpi = 300
@@ -183,9 +183,46 @@ class LocalImageRedactor:
                 effective_dpi = self.dpi
             else:
                 effective_dpi = 72
-        tp = page.get_textpage_ocr(language="eng", dpi=effective_dpi, tessdata=self.tessdata_dir)
-        words = page.get_text("words", textpage=tp)
-        full_text = page.get_text(textpage=tp)
+
+        tmp_ocr_doc = None
+        if is_low_mem and not getattr(self, "_is_current_file_image", False):
+            # Fast Pre-OCR Contrast Normalization on page raster
+            pix = page.get_pixmap(dpi=effective_dpi)
+            arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape((pix.height, pix.width, pix.n))
+            if pix.n == 4:
+                page_bgr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
+            elif pix.n == 3:
+                page_bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+            else:
+                page_bgr = cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
+            del pix, arr
+
+            lab = cv2.cvtColor(page_bgr, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (41, 41))
+            bg = cv2.morphologyEx(l, cv2.MORPH_CLOSE, kernel)
+            norm_l = np.uint8(np.clip((l.astype(np.float32) / np.maximum(1.0, bg.astype(np.float32))) * 255.0, 0, 255))
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            cl = clahe.apply(norm_l)
+            lab = cv2.merge((cl, a, b))
+            page_bgr = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+            del lab, l, a, b, cl, kernel, bg, norm_l
+
+            _, enc = cv2.imencode(".png", page_bgr)
+            tmp_ocr_doc = pymupdf.open()
+            tmp_ocr_page = tmp_ocr_doc.new_page(width=page.rect.width, height=page.rect.height)
+            tmp_ocr_page.insert_image(page.rect, stream=enc.tobytes())
+            del enc
+
+            search_page_ref = tmp_ocr_page
+            tp = tmp_ocr_page.get_textpage_ocr(language="eng", dpi=effective_dpi, tessdata=self.tessdata_dir)
+            words = tmp_ocr_page.get_text("words", textpage=tp)
+            full_text = tmp_ocr_page.get_text(textpage=tp)
+        else:
+            search_page_ref = page
+            tp = page.get_textpage_ocr(language="eng", dpi=effective_dpi, tessdata=self.tessdata_dir)
+            words = page.get_text("words", textpage=tp)
+            full_text = page.get_text(textpage=tp)
 
         eu_marker_regex = re.compile(
             r"[äöüßéèêëàâîïôûùçñáíóúÁÉÍÓÚÑÄÖÜ]|\b(?:Rezept|Krankenkasse|Geb|Ausstellungsdatum|Vorname|Unterschrift|Arzt|Receta|Ordonnance|Nom|Prénom|Calle|Straße)\b",
@@ -213,7 +250,7 @@ class LocalImageRedactor:
             for match in rx.finditer(full_text):
                 match_str = match.group(0).strip()
                 if match_str:
-                    for r in page.search_for(match_str, textpage=tp):
+                    for r in search_page_ref.search_for(match_str, textpage=tp):
                         whitelisted_rects.append(r)
         self._last_whitelisted_rects = whitelisted_rects
 
@@ -256,6 +293,15 @@ class LocalImageRedactor:
                     else:
                         rect.y1 = min(rect.y1, split_y)
                     continue
+                # If visual target (signature or stamp) overlaps whitelisted printed text horizontally, clip it instead of dropping
+                if raw_text in ("[HANDWRITTEN_SIGNATURE]", "[CHROMATIC_STAMP_SEAL]"):
+                    if rect.x1 - wr.x1 > 20:
+                        rect.x0 = max(rect.x0, wr.x1 + 2)
+                        continue
+                    elif wr.x0 - rect.x0 > 20:
+                        rect.x1 = min(rect.x1, wr.x0 - 2)
+                        continue
+
                 if inter.get_area() > 0.15 * min(rect.get_area(), wr.get_area()):
                     return False
             return True
@@ -288,6 +334,11 @@ class LocalImageRedactor:
                             targets[idx].raw_text = f"{targets[idx].raw_text} {text}".strip()
                         return
                     if inter_a > 0.75 * min(rect.get_area(), r.get_area()):
+                        if text and text not in (targets[idx].raw_text or ""):
+                            if targets[idx].raw_text in ("[HANDWRITTEN_INK]", None, ""):
+                                targets[idx].raw_text = text
+                            else:
+                                targets[idx].raw_text = f"{targets[idx].raw_text} {text}".strip()
                         return
             recorded_rects.append(rect)
             targets.append(RedactionTarget(
@@ -300,22 +351,26 @@ class LocalImageRedactor:
             ))
 
         # Render page pixmap once for visual analysis (barcodes, QR, stamps, signatures)
-        if is_low_mem:
-            vis_dpi = 72
-        else:
-            vis_dpi = 72 if max_pt > 2000 else 150
-        pix = page.get_pixmap(dpi=vis_dpi)
-        arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape((pix.height, pix.width, pix.n))
-        if pix.n == 4:
-            page_bgr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
-        elif pix.n == 3:
-            page_bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-        else:
-            page_bgr = cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
+        if 'page_bgr' not in locals() or page_bgr is None:
+            if is_low_mem:
+                vis_dpi = 72
+            else:
+                vis_dpi = 72 if max_pt > 2000 else 150
+            pix = page.get_pixmap(dpi=vis_dpi)
+            arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape((pix.height, pix.width, pix.n))
+            if pix.n == 4:
+                page_bgr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
+            elif pix.n == 3:
+                page_bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+            else:
+                page_bgr = cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
 
-        scale_px_x = page.rect.width / max(1.0, pix.width)
-        scale_px_y = page.rect.height / max(1.0, pix.height)
-        del pix, arr
+            scale_px_x = page.rect.width / max(1.0, pix.width)
+            scale_px_y = page.rect.height / max(1.0, pix.height)
+            del pix, arr
+        else:
+            scale_px_x = page.rect.width / max(1.0, page_bgr.shape[1])
+            scale_px_y = page.rect.height / max(1.0, page_bgr.shape[0])
 
         # 0. Automatic QR Code and Barcode Detection
         code_boxes = detect_qr_and_barcodes(page, bgr=page_bgr, scale_x=scale_px_x, scale_y=scale_px_y)
@@ -377,7 +432,7 @@ class LocalImageRedactor:
         # -------------------------------------------------------------------
         parse_form_anchors_on_lines(
             line_objects=line_objects,
-            search_page=page,
+            search_page=search_page_ref,
             textpage=tp,
             page_bgr=page_bgr,
             scale_px_x=scale_px_x,
@@ -396,7 +451,7 @@ class LocalImageRedactor:
         for match in inline_dispense_re.finditer(full_text):
             m_str = match.group(0).strip()
             if not self.is_whitelisted(m_str) and len(m_str) > 5:
-                for r in page.search_for(m_str, textpage=tp):
+                for r in search_page_ref.search_for(m_str, textpage=tp):
                     add_target(r, "DISPENSING_PHARMACY", m_str, engine="inline_dispense_rule")
 
         # Anywhere-on-page Pharmacy/Clinic/Healthcare blocks
@@ -407,7 +462,7 @@ class LocalImageRedactor:
         for match in pharmacy_block_re.finditer(full_text):
             m_str = match.group(0).strip()
             if not self.is_whitelisted(m_str) and len(m_str) > 5:
-                for r in page.search_for(m_str, textpage=tp):
+                for r in search_page_ref.search_for(m_str, textpage=tp):
                     if not is_in_clinical_zone(r) or r.y0 >= footer_y0 - 20:
                         add_target(r, "CLINIC_FACILITY", m_str, engine="pharmacy_block_rule")
 
@@ -429,9 +484,9 @@ class LocalImageRedactor:
             ("DOCTOR_NAME", re.compile(
                 r"(?i:\b(?:Dr\.|Dr|Prof\.|Prof|Herr\s+Dr\.|Frau\s+Dr\.|Prof\.\s*Dr\.|Dr\.\s*med\.|Dott\.|Dott\.ssa|Or\.))[^\S\r\n]+(?:[A-ZÄÖÜÁÉÍÓÚÑ]\.?[^\S\r\n]+)?[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ\-'.]+(?:[^\S\r\n]+(?:[A-ZÄÖÜÁÉÍÓÚÑ]\.?|[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ\-'.]+))*(?:\s*\([A-Za-z\s,.]+\))?|"
                 r"\b(?:Dr|Prof)[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ]+\b|"
-                r"\b[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ\-'.]+(?:[^\S\r\n]+(?:[A-ZÄÖÜÁÉÍÓÚÑ]\.?|[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ\-'.]+))*[,\s]+(?:M\.?B\.?B\.?S|M\.?D|M\.?S|D\.?M\.?R\.?D|D\.?N\.?B|F\.?R\.?C\.?R|F\.?R\.?C\.?S|FRACGP|MRCGP|MBChB|FRACP|O\.?D\.?|D\.?O\.?|PharmD)\b"
+                r"\b[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ\-'.]+(?:[^\S\r\n]+(?:[A-ZÄÖÜÁÉÍÓÚÑ]\.?|[A-ZÄÖÜÁÉÍÓÚÑ][a-zA-Zäöüßáéíóúñ\-'.]+))*[,\s]+(?:M\.?B\.?B\.?S|M\.?D\.?|M\.?S\.?|D\.?M\.?R\.?D|D\.?N\.?B|F\.?R\.?C\.?R|F\.?R\.?C\.?S|FRACGP|MRCGP|MBChB|FRACP|[O0]\.?D\.?|D\.?O\.?|PharmD)\b"
             )),
-            ("DOCTOR_CREDENTIALS", re.compile(r"\b(?:MBBS|M\.B\.B\.S|MD|M\.D|MS|M\.S|DMRD|D\.M\.R\.D|DNB|D\.N\.B|FRCR|FRCS|FRACGP|MRCGP|MBChB|FRACP|O\.?D\.?|D\.?O\.?|PharmD)\b")),
+            ("DOCTOR_CREDENTIALS", re.compile(r"\b(?:MBBS|M\.B\.B\.S|MD|M\.D\.?|MS|M\.S\.?|DMRD|D\.M\.R\.D|DNB|D\.N\.B|FRCR|FRCS|FRACGP|MRCGP|MBChB|FRACP|[O0]\.?D\.?|D\.?O\.?|PharmD)\b")),
             ("ID_TOKEN", re.compile(r"\b[A-Z]{2,4}[-/]\d{4,12}(?:[-/]\d+)?\b|\b\d{8,12}\b")),
             ("ADDRESS_STREET", re.compile(
                 r"\b\d+\s+[A-Za-z0-9\-.,]+(?:\s+[A-Za-z0-9\-.,]+)*\s+(?:Street|St|Avenue|Ave|Drive|Dr|Road|Rd|Boulevard|Blvd|Court|Ct|Lane|Ln|Terrace|Colony|Market|Chowk|Way|Square|Sq|Place|Pl|Straße|Str|Weg|Platz|Allee|Gasse|Rue|Bd|Calle|Paseo|Via|Piazza)\b|"
@@ -450,7 +505,7 @@ class LocalImageRedactor:
             for match in reg.finditer(full_text):
                 match_str = match.group(0).strip()
                 if not self.is_whitelisted(match_str) and len(match_str) > 2:
-                    rects = page.search_for(match_str, textpage=tp)
+                    rects = search_page_ref.search_for(match_str, textpage=tp)
                     for r in rects:
                         if cat in ("ID_TOKEN", "CITY_STATE") and is_in_clinical_zone(r):
                             continue
@@ -495,7 +550,7 @@ class LocalImageRedactor:
             for match in re.finditer(reg, full_text, re.IGNORECASE):
                 match_str = match.group(0).strip()
                 if not self.is_whitelisted(match_str) and len(match_str) > 2:
-                    rects = page.search_for(match_str, textpage=tp)
+                    rects = search_page_ref.search_for(match_str, textpage=tp)
                     for r in rects:
                         add_target(r, cat, match_str, engine="statutory_scanner")
 
@@ -556,7 +611,7 @@ class LocalImageRedactor:
         for cand in ner_candidates:
             matched_str = cand["text"]
             if not self.is_whitelisted(matched_str) and len(matched_str) >= 3:
-                rects = page.search_for(matched_str, textpage=tp)
+                rects = search_page_ref.search_for(matched_str, textpage=tp)
                 for r in rects:
                     if is_in_clinical_zone(r):
                         continue
@@ -564,7 +619,7 @@ class LocalImageRedactor:
                 if not rects and len(matched_str.split()) > 1:
                     for part in matched_str.split():
                         if len(part) >= 4 and not self.is_whitelisted(part):
-                            for pr in page.search_for(part, textpage=tp):
+                            for pr in search_page_ref.search_for(part, textpage=tp):
                                 if is_in_clinical_zone(pr):
                                     continue
                                 add_target(pr, cand["category"], part, engine="spacy_ner_part")
@@ -688,20 +743,20 @@ class LocalImageRedactor:
         if 'line_objects_enh' in locals() and line_objects_enh:
             all_candidate_lines.extend(line_objects_enh)
 
-        addr_line_re = re.compile(r"[A-Za-zäöüß]+\s*\d+|\b\d{4,6}\s+[A-Za-zäöüß]+", re.IGNORECASE)
+        addr_line_re = re.compile(r"[A-Za-zäöüß]+\s*\d+|\b\d{4,6}\s+[A-Za-zäöüß]+|\b(?:NSW|VIC|QLD|WA|SA|TAS|ACT|NT)\s+\d{4}\b", re.IGNORECASE)
         street_keyword_re = re.compile(
-            r"\b(?:Street|St|Road|Rd|Avenue|Ave|Drive|Dr|Way|Lane|Ln|Boulevard|Blvd|Court|Ct|Straße|Str|Weg|Platz|Allee|Gasse|Rue|Bd|Calle|Paseo|Via)\b",
+            r"\b(?:Street|St|Road|Rd|Avenue|Ave|Drive|Dr|Way|Lane|Ln|Boulevard|Blvd|Court|Ct|Straße|Str|Weg|Platz|Allee|Gasse|Rue|Bd|Calle|Paseo|Via|Postcode|SYDNEY|Sydney|Melbourne|Brisbane|Perth|Adelaide)\b",
             re.IGNORECASE
         )
         for pt in patient_name_targets:
             curr_y1 = pt.bbox.y1
             curr_x0 = pt.bbox.x0
-            for _ in range(3):
+            for _ in range(4):
                 found_next_line = False
                 for l in all_candidate_lines:
                     v_gap = l["rect"].y0 - curr_y1
                     x0_diff = abs(l["rect"].x0 - curr_x0)
-                    if 0 < v_gap < 25 and x0_diff < 30 and l["rect"].y1 <= page.rect.height * 0.45:
+                    if -5 <= v_gap < 35 and x0_diff < 150 and l["rect"].y1 <= page.rect.height * 0.50:
                         if clinical_y0 is not None and l["rect"].y1 > clinical_y0:
                             continue
                         l_text = l["text"].strip()
@@ -719,18 +774,45 @@ class LocalImageRedactor:
         # -------------------------------------------------------------------
         # 4. Zero-keyword Visual Grounder (chromatic stamps and handwritten signatures)
         # -------------------------------------------------------------------
-        skip_step_4 = is_low_mem
-        if self.enable_visual_grounder and self.grounder is not None and not skip_step_4:
+        if self.enable_visual_grounder and self.grounder is not None:
             try:
-                visual_targets = self.grounder.detect_visual_pii_from_bgr(page_bgr, page_num=page_num)
-                for vt in visual_targets:
-                    scaled_rect = pymupdf.Rect(
-                        vt.bbox.x0 * scale_px_x,
-                        vt.bbox.y0 * scale_px_y,
-                        vt.bbox.x1 * scale_px_x,
-                        vt.bbox.y1 * scale_px_y
-                    )
-                    add_target(scaled_rect, vt.category, vt.raw_text, engine=vt.engine)
+                if is_low_mem:
+                    bg_h, bg_w = page_bgr.shape[:2]
+                    max_bg = max(bg_w, bg_h)
+                    if max_bg > 850:
+                        v_scale = 850.0 / max_bg
+                        down_w = max(1, int(round(bg_w * v_scale)))
+                        down_h = max(1, int(round(bg_h * v_scale)))
+                        grounder_bgr = cv2.resize(page_bgr, (down_w, down_h), interpolation=cv2.INTER_AREA)
+                        v_ratio_x = bg_w / float(down_w)
+                        v_ratio_y = bg_h / float(down_h)
+                    else:
+                        grounder_bgr = page_bgr
+                        v_ratio_x = 1.0
+                        v_ratio_y = 1.0
+
+                    visual_targets = self.grounder.detect_visual_pii_from_bgr(grounder_bgr, page_num=page_num)
+                    for vt in visual_targets:
+                        scaled_rect = pymupdf.Rect(
+                            vt.bbox.x0 * v_ratio_x * scale_px_x,
+                            vt.bbox.y0 * v_ratio_y * scale_px_y,
+                            vt.bbox.x1 * v_ratio_x * scale_px_x,
+                            vt.bbox.y1 * v_ratio_y * scale_px_y
+                        )
+                        add_target(scaled_rect, vt.category, vt.raw_text, engine=vt.engine)
+                    if grounder_bgr is not page_bgr:
+                        del grounder_bgr
+                    gc.collect()
+                else:
+                    visual_targets = self.grounder.detect_visual_pii_from_bgr(page_bgr, page_num=page_num)
+                    for vt in visual_targets:
+                        scaled_rect = pymupdf.Rect(
+                            vt.bbox.x0 * scale_px_x,
+                            vt.bbox.y0 * scale_px_y,
+                            vt.bbox.x1 * scale_px_x,
+                            vt.bbox.y1 * scale_px_y
+                        )
+                        add_target(scaled_rect, vt.category, vt.raw_text, engine=vt.engine)
             except Exception:
                 pass
 
@@ -783,6 +865,12 @@ class LocalImageRedactor:
                         break
 
         try:
+            if tmp_ocr_doc is not None:
+                tmp_ocr_doc.close()
+                del tmp_ocr_doc
+        except Exception:
+            pass
+        try:
             del page_bgr, pix, arr
         except Exception:
             pass
@@ -823,28 +911,50 @@ class LocalImageRedactor:
 
         # Handle Image Input
         if is_image_input:
+            self._is_current_file_image = True
             is_low_mem = os.environ.get("RENDER_LOW_MEMORY") == "1"
-            with Image.open(input_path) as orig_img:
-                orig_w, orig_h = orig_img.size
-                if is_low_mem:
-                    max_dim = 1100
-                    if max(orig_w, orig_h) > max_dim:
-                        scale_down = float(max_dim) / max(orig_w, orig_h)
-                        new_w = max(1, int(orig_w * scale_down))
-                        new_h = max(1, int(orig_h * scale_down))
-                        proc_img = orig_img.resize((new_w, new_h), Image.Resampling.BILINEAR)
-                    else:
-                        proc_img = orig_img.copy()
+            img_bgr = cv2.imread(input_path)
+            if img_bgr is None:
+                with Image.open(input_path) as pil_img:
+                    orig_w, orig_h = pil_img.size
+                    img_bgr = cv2.cvtColor(np.array(pil_img.convert("RGB")), cv2.COLOR_RGB2BGR)
+            else:
+                orig_h, orig_w = img_bgr.shape[:2]
 
-                    img_bytes_io = io.BytesIO()
-                    proc_img.convert("RGB").save(img_bytes_io, format="JPEG", quality=88)
-                    img_bytes_io.seek(0)
-                    with pymupdf.open(stream=img_bytes_io.getvalue(), filetype="jpeg") as img_doc:
-                        pdf_bytes = img_doc.convert_to_pdf()
-                    del proc_img, img_bytes_io
-                else:
-                    with pymupdf.open(input_path) as img_doc:
-                        pdf_bytes = img_doc.convert_to_pdf()
+            if is_low_mem:
+                # Tiny Image Upscaling:
+                if max(orig_w, orig_h) < 700:
+                    target_dim = 1785 if min(orig_w, orig_h) < 400 else 1000
+                    scale = float(target_dim) / max(orig_w, orig_h)
+                    new_w = max(1, int(round(orig_w * scale)))
+                    new_h = max(1, int(round(orig_h * scale)))
+                    img_bgr = cv2.resize(img_bgr, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+                elif max(orig_w, orig_h) > 1350:
+                    scale = 1350.0 / max(orig_w, orig_h)
+                    new_w = max(1, int(round(orig_w * scale)))
+                    new_h = max(1, int(round(orig_h * scale)))
+                    img_bgr = cv2.resize(img_bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+                # Fast Pre-OCR Contrast Normalization:
+                lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
+                l, a, b = cv2.split(lab)
+                kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (41, 41))
+                bg = cv2.morphologyEx(l, cv2.MORPH_CLOSE, kernel)
+                norm_l = np.uint8(np.clip((l.astype(np.float32) / np.maximum(1.0, bg.astype(np.float32))) * 255.0, 0, 255))
+                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                cl = clahe.apply(norm_l)
+                lab = cv2.merge((cl, a, b))
+                proc_bgr = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+                del lab, l, a, b, cl, kernel, bg, norm_l
+
+                _, enc = cv2.imencode(".png", proc_bgr)
+                with pymupdf.open("png", enc.tobytes()) as img_doc:
+                    pdf_bytes = img_doc.convert_to_pdf()
+                del enc, proc_bgr, img_bgr
+            else:
+                with pymupdf.open(input_path) as img_doc:
+                    pdf_bytes = img_doc.convert_to_pdf()
+                del img_bgr
             doc = pymupdf.open("pdf", pdf_bytes)
             page = doc[0]
 
@@ -889,12 +999,9 @@ class LocalImageRedactor:
 
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             if out_ext_lower in self.IMAGE_EXTENSIONS:
-                if is_low_mem:
-                    pix = page.get_pixmap(dpi=96)
-                else:
-                    scale_x = orig_w / page.rect.width
-                    scale_y = orig_h / page.rect.height
-                    pix = page.get_pixmap(matrix=pymupdf.Matrix(scale_x, scale_y))
+                scale_x = orig_w / page.rect.width
+                scale_y = orig_h / page.rect.height
+                pix = page.get_pixmap(matrix=pymupdf.Matrix(scale_x, scale_y))
                 pix.save(output_path)
                 del pix
             else:
@@ -986,6 +1093,7 @@ class LocalImageRedactor:
             }
 
         # Handle PDF Input
+        self._is_current_file_image = False
         doc = pymupdf.open(input_path)
         all_targets: List[RedactionTarget] = []
         collected_ocr_text: List[str] = []
@@ -993,8 +1101,8 @@ class LocalImageRedactor:
         is_low_mem = os.environ.get("RENDER_LOW_MEMORY") == "1"
         for p_idx, page in enumerate(doc):
             orig_dpi = self.dpi
-            if is_low_mem and max(page.rect.width, page.rect.height) > 1000:
-                self.dpi = 100
+            if is_low_mem:
+                self.dpi = 135
             try:
                 targets = self.find_pii_targets_for_page(page, p_idx + 1)
             finally:

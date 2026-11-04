@@ -372,7 +372,14 @@ def parse_form_anchors_on_lines(
 
             same_line_words = []
             prev_x = a_rect.x1
+            field_boundary_re = re.compile(
+                r"^(?:Age|Sex|Gender|DOB|Date|_?Da[kt]e_?|DEA[#R]?|Licen[sc]e[#f]?|Refill|Refil|[O0]\.?D\.?|M\.?D\.?|Rx|Rp)$",
+                re.IGNORECASE
+            )
             for sw_rect, sw_txt in candidate_words:
+                clean_tok = re.sub(r"^[^\w‘']+|[^\w‘']+$", "", sw_txt)
+                if same_line_words and clean_tok and field_boundary_re.match(clean_tok):
+                    break
                 gap = sw_rect.x0 - prev_x
                 if same_line_words and gap > 120:
                     break

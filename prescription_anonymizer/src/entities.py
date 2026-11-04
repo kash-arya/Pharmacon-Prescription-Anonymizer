@@ -54,8 +54,8 @@ KEY_VALUE_ANCHORS = {
         r"\bPatient\s+Information\b",
         r"\bPatient\s*Name\b",
         r"\bPt(?:\s*Name)?\b",
-        r"\bPatient\b(?!\s+(?:ID|Information|Type|should|must|to))",
-        r"\b‘?Name\b(?!\s+(?:of\s+(?:Insurance|Company|Hospital|Clinic)))",
+        r"\bPatient(?:'s|’s)?(?:\s*(?:name(?:\s*&\s*address)?)?)?\b(?!\s+(?:ID|Information|Type|should|must|to))",
+        r"\b[‘“\"']?(?:Name|Neale|Nane|Naime)\b(?!\s+(?:of\s+(?:Insurance|Company|Hospital|Clinic)))",
         r"\bSurname\b",
         r"\bForename(?:s)?\b",
         r"\bVorname\b",
@@ -105,6 +105,14 @@ KEY_VALUE_ANCHORS = {
         r"\bVersicherungsnummer\b",
         r"\bLicense\s*#?\b",
         r"\bLicence\s*#?\b",
+        r"\bLicense[a-z#]?\b",
+        r"\bLicence[a-z#]?\b",
+        r"\bDEA[#R]?\b",
+        r"\bPBS(?:\s*approval)?(?:\s*no\.?|\s*number)?\b",
+        r"\bPrescriber(?:\s*no\.?|\s*number)?\b",
+        r"\bMedicare(?:\s*no\.?|\s*number)?\b",
+        r"\bRpt\s*#?\b",
+        r"\bReg\d+:\d+\b",
         r"\bKassen-Nr\.?\b",
         r"\bStatus\b",
         r"\bLicence(?:\s*No\.?)?\b",
@@ -171,9 +179,9 @@ KEY_VALUE_ANCHORS = {
         r"\bCu[ñn]o\b",
     ],
     "ADDRESS": [
-        r"\bAddress\b",
-        r"\bAddr\b",
+        r"\b(?:Address|Andress|Addr)\b",
         r"\bPractice\s*(?:/\s*Surgery\s*)?Address\b",
+        r"\bPatient(?:'s|’s)?\s*(?:name\s*&\s*)?address\b",
         r"\bSurgery\s+Address\b",
         r"\bCity\b",
         r"\bState\b",
@@ -251,22 +259,24 @@ DOCTOR_ANCHORS = [
     r"\bTyped\s*By\s*[:\-=~+]?\s*[A-Za-z0-9\s.]+",
     r"\bCreated\s*By\s*[:\-=~+]?\s*[A-Za-z0-9\s.]+",
     r"\bPrinted\s*By\s*[:\-=~+]?\s*[A-Za-z0-9\s.]+",
-    r"\b(?:MBBS|M\.B\.B\.S|MD|M\.D|MS|M\.S|DMRD|D\.M\.R\.D|DNB|D\.N\.B|FRCR|FRCS|FRACP)\b",
+    r"\b(?:MBBS|M\.B\.B\.S|MD|M\.D\.?|MS|M\.S\.?|DMRD|D\.M\.R\.D|DNB|D\.N\.B|FRCR|FRCS|FRACGP|MRCGP|MBChB|FRACP|[O0]\.?D\.?|D\.?O\.?|PharmD)\b",
 ]
 
 # Statutory National Identifiers (US, UK, AU, EU, IN)
 STATUTORY_ID_PATTERNS = [
     # US Identifiers
-    (r"\bDEA(?:\s*(?:REG|Reg|Registration)\.?)?(?:\s*(?:No|Number)\.?)?\s*[:\-=~+]?\s*([A-Z]{2}[0-9]{7})\b", "IDENTIFIER_DEA"),
+    (r"\bDEA(?:\s*(?:REG|Reg|Registration)\.?)?(?:\s*(?:No|Number)\.?)?\s*[:\-=~+#R]?\s*([A-Z]{2}[0-9]{7}|[A-Z0-9]{6,10})\b", "IDENTIFIER_DEA"),
     (r"\bNPI(?:\s*(?:No|Number)\.?)?\s*[:\-=~+]?\s*(\d{10})\b", "IDENTIFIER_NPI"),
     (r"\b(?:SSN|Social\s*Security)\s*[:\-=~+]?\s*(\d{3}-\d{2}-\d{4})\b", "IDENTIFIER_SSN"),
-    (r"\b(?:(?:State|[A-Z]{2})?\s*(?:Medical\s*)?Lic(?:en[cs]e)?\.?\s*(?:No\.?)?)\s*[:\-=~+]?\s*([A-Z0-9]{2,4}[-\s]?[A-Z0-9]{4,10})\b", "IDENTIFIER_US_STATE_LIC"),
+    (r"\b(?:(?:State|[A-Z]{2})?\s*(?:Medical\s*)?Lic(?:en[cs]e)?\.?\s*(?:No\.?)?|License[#f\s:=-]+|Licence[#f\s:=-]+)\s*[:\-=~+]?\s*([A-Z0-9]{2,4}[-\s]?[A-Z0-9]{2,10})\b", "IDENTIFIER_US_STATE_LIC"),
     # UK Identifiers
     (r"\bNHS(?:\s*(?:No|Number)\.?)?\s*[:\-=~+]?\s*(\d{3}\s*\d{3}\s*\d{4}|\d{10})\b", "IDENTIFIER_NHS"),
     (r"\bGMC(?:\s*(?:No|Number)\.?)?\s*[:\-=~+]?\s*(\d{7})\b", "IDENTIFIER_GMC"),
     # Australia Identifiers
     (r"\bMedicare(?:\s*(?:No|Number)\.?)?\s*[:\-=~+]?\s*(\d{4}\s*\d{5}\s*\d{1}|\d{10}(?:\s*\d)?)\b", "IDENTIFIER_MEDICARE"),
+    (r"\b(?:\d{4}[-\s]\d{5}[-\s]\d[-\s]\d|\d{4}[-\s]\d{5}[-\s]\d)\b", "IDENTIFIER_MEDICARE"),
     (r"\b(?:PBS\s+Prescriber|PBS|Prescriber)(?:\s*(?:No|Number)\.?)?\s*[:\-=~+]?\s*(\d{6,7}[A-Za-z]?)\b", "IDENTIFIER_PBS"),
+    (r"\b(?:PBS\s*(?:approval\s*)?no\.?|Prescriber\s*no\.?|Rpt\s*#?|Reg\s*\d+:\d+)\s*[:\-=~+]?\s*([A-Za-z0-9\-/]+)\b", "IDENTIFIER_PBS"),
     (r"\bAHPRA(?:\s*(?:REG|Reg|Registration)\.?)?(?:\s*(?:No|Number)\.?)?\s*[:\-=~+]?\s*(MED\d{10})\b", "IDENTIFIER_AHPRA"),
     # EU / German Identifiers
     (r"\bVersicherten-Nr\.?\s*[:\-=~+.]?\s*([A-Z0-9]{8,12})\b", "IDENTIFIER_VERSICHERTEN"),
