@@ -8,9 +8,57 @@ contrast enhancement for degraded smartphone photos and scanned PDFs.
 
 from typing import List, Dict, Any, Optional, Tuple
 import os
+import re
 import pymupdf
 import cv2
 import numpy as np
+
+try:
+    from prescription_anonymizer.src.entities import BOUNDARY_LABEL_RE
+except ImportError:
+    try:
+        from src.entities import BOUNDARY_LABEL_RE
+    except ImportError:
+        BOUNDARY_LABEL_RE = re.compile(
+            r"^(?:Age|Sex|Gender|Date|DOB|D\.?O\.?B\.?|Weight|Wt|BP|B\.?P\.?|Rx|Rp\.?|Diagnosis|Provisional\s+Diagnosis|Chief\s+Complaint|Lab\s+Tests?)\b",
+            re.IGNORECASE
+        )
+
+
+def normalize_ink_contrast(img: np.ndarray, gamma: float = 1.6) -> np.ndarray:
+    """
+    Scale- and contrast-invariant pre-OCR ink normalization.
+    Compresses faint/mid-grey digital ink (Luminance 130..235 on bright backgrounds
+    where 75th percentile > 205) toward dark foreground ink via adaptive gamma darkening (gamma=1.6)
+    so Tesseract never drops light-grey sub-headers, emails, or registration numbers.
+    """
+    if img is None or img.size == 0:
+        return img
+
+    if len(img.shape) == 3:
+        if img.shape[2] == 4:
+            gray = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY)
+        else:
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = img.copy()
+
+    p75 = float(np.percentile(gray, 75))
+    if p75 > 205.0:
+        table = np.array([((i / 255.0) ** gamma) * 255.0 for i in range(256)]).astype("uint8")
+        darkened = cv2.LUT(gray, table)
+
+        mid_mask = (gray >= 130) & (gray <= 235)
+        out_gray = gray.copy()
+        out_gray[mid_mask] = darkened[mid_mask]
+
+        if len(img.shape) == 3:
+            ratio = out_gray.astype(np.float32) / np.maximum(1.0, gray.astype(np.float32))
+            out_img = np.clip(img.astype(np.float32) * ratio[:, :, np.newaxis], 0, 255).astype(np.uint8)
+            return out_img
+        return out_gray
+
+    return img
 
 
 def resolve_tessdata_path(custom_dir: Optional[str] = None) -> str:
@@ -63,6 +111,9 @@ def reconstruct_visual_lines(words: List[Tuple]) -> List[Dict[str, Any]]:
     """
     Groups word tokens into non-overlapping horizontal lines using running vertical centers (y_mid).
     Prevents vertical chaining / line ballooning across multi-column forms.
+    Within each reconstructed visual line, groups tokens into Logical Column Segments
+    by bridging horizontal gaps up to 4.5 * median_line_height, splitting ONLY on
+    true multi-column gaps or demographic/clinical boundary labels.
     """
     visual_lines: List[List[Tuple[pymupdf.Rect, str]]] = []
     for w in words:
@@ -93,10 +144,65 @@ def reconstruct_visual_lines(words: List[Tuple]) -> List[Dict[str, Any]]:
         for it in sw[1:]:
             u_rect = u_rect | it[0]
         line_str = " ".join(item[1] for item in sw)
+
+        # Scale-invariant intra-line segment coalescing
+        heights = [item[0].height for item in sw if item[0].height > 2.0]
+        med_h = float(np.median(heights)) if heights else 14.0
+        med_h = max(6.0, med_h)
+        max_bridge_gap = 4.5 * med_h
+
+        segments: List[Dict[str, Any]] = []
+        curr_seg_words: List[Tuple[pymupdf.Rect, str]] = [sw[0]]
+
+        for it in sw[1:]:
+            prev_it = curr_seg_words[-1]
+            gap = it[0].x0 - prev_it[0].x1
+            clean_word = it[1].strip(":#=-~_., ")
+            is_boundary = bool(BOUNDARY_LABEL_RE.search(clean_word))
+            is_gap_split = (gap > max_bridge_gap)
+
+            if is_gap_split or is_boundary:
+                # Close current segment
+                seg_r = curr_seg_words[0][0]
+                for w_item in curr_seg_words[1:]:
+                    seg_r = seg_r | w_item[0]
+                segments.append({
+                    "rect": seg_r,
+                    "text": " ".join(w_item[1] for w_item in curr_seg_words),
+                    "words": list(curr_seg_words),
+                    "x0": seg_r.x0,
+                    "y0": seg_r.y0,
+                    "x1": seg_r.x1,
+                    "y1": seg_r.y1,
+                    "height": seg_r.height,
+                    "line_height": med_h,
+                })
+                curr_seg_words = [it]
+            else:
+                curr_seg_words.append(it)
+
+        if curr_seg_words:
+            seg_r = curr_seg_words[0][0]
+            for w_item in curr_seg_words[1:]:
+                seg_r = seg_r | w_item[0]
+            segments.append({
+                "rect": seg_r,
+                "text": " ".join(w_item[1] for w_item in curr_seg_words),
+                "words": list(curr_seg_words),
+                "x0": seg_r.x0,
+                "y0": seg_r.y0,
+                "x1": seg_r.x1,
+                "y1": seg_r.y1,
+                "height": seg_r.height,
+                "line_height": med_h,
+            })
+
         line_objects.append({
             "rect": u_rect,
             "text": line_str,
-            "words": sw
+            "words": sw,
+            "segments": segments,
+            "line_height": med_h,
         })
     return line_objects
 
@@ -132,7 +238,8 @@ def get_enhanced_fullpage_ocr(
     else:
         gray = arr
 
-    # 1. Denoising + CLAHE
+    # 1. Pre-OCR Ink Normalization + CLAHE
+    gray = normalize_ink_contrast(gray)
     clahe = cv2.createCLAHE(clipLimit=2.2, tileGridSize=(8, 8))
     cl_img = clahe.apply(gray)
 

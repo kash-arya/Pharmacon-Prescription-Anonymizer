@@ -346,9 +346,73 @@ CLINICAL_WHITELIST_PATTERNS = [
     r"\b[A-Za-z]{3,}(?:itis|osis|emia|pathy|algia|rrhea|pnea|trophy|plasia|megaly|sclerosis|stenosis)\b",
     r"\b(?:Acute|Chronic|Essential|Benign|Malignant|Primary|Secondary|Clinical\s+Indications|ICD-10|Indications|Substitutions|Permitted|Refills?|Dispense|oral|capsule|tablet|mouth|management)\b",
     r"\([A-Z]\d{2}(?:\.\d{1,2})?\)",
+    # Common Diagnostic Lab Tests and Investigations
+    r"\b(?:Complete\s+Blood\s+Count|CBC|Chest\s+X-Ray|Blood\s+Count|Lipid\s+Profile|Liver\s+Function\s+Test|LFT|KFT|Thyroid(?:\s+Profile)?|Hemoglobin|HbA1c|X-Ray|Ultrasound|ECG|EKG)\b",
+    # Clinical Barrier Headers, Findings & Legal Disclaimer Boilerplate
+    r"\b(?:Provisional\s+Diagnosis|Chief\s+Complaints?|Lab\s+Tests?|Medicines?|Follow\s*up|Advice)\b",
+    r"\b(?:Disclaimer|Terms\s*(?:&|and)\s*Conditions|Not\s+valid\s+for\s+medico-legal|provisional\s+in\s+nature|recipient(?:'s|’s)?\s+use\s+only|Substitution\s+allowed)\b",
 ]
 
 _COMPILED_WHITELIST = [re.compile(pat, re.IGNORECASE) for pat in CLINICAL_WHITELIST_PATTERNS]
+
+# ---------------------------------------------------------------------------
+# Scale-Invariant Structural & Clinical Boundary Regex Lexicons
+# ---------------------------------------------------------------------------
+
+BOUNDARY_LABEL_PATTERNS = [
+    r"\bAge\b",
+    r"\bSex\b",
+    r"\bGender\b",
+    r"\bDate\b",
+    r"\bDOB\b",
+    r"\bD\.?O\.?B\.?\b",
+    r"\bWeight\b",
+    r"\bWt\b",
+    r"\bBP\b",
+    r"\bB\.?P\.?\b",
+    r"\bRx\b",
+    r"\bRp\.?\b",
+    r"\bDiagnosis\b",
+    r"\bProvisional\s+Diagnosis\b",
+    r"\bChief\s+Complaint\b",
+    r"\bLab\s+Tests?\b",
+]
+BOUNDARY_LABEL_RE = re.compile(
+    r"^(?:Age|Sex|Gender|Date|DOB|D\.?O\.?B\.?|Weight|Wt|BP|B\.?P\.?|Rx|Rp\.?|Diagnosis|Provisional\s+Diagnosis|Chief\s+Complaint|Lab\s+Tests?)\b",
+    re.IGNORECASE
+)
+
+CLINICAL_BARRIER_PATTERNS = [
+    r"\b(?:Diagnosis|Provisional\s+Diagnosis|Chief\s+Complaint|History|Symptoms|Lab\s+Tests?|Medicines?|Rx|Rp\.?|Advice|Follow\s*up|Tab\.?|Cap\.?|Syp\.?)\b"
+]
+CLINICAL_BARRIER_RE = re.compile("|".join(CLINICAL_BARRIER_PATTERNS), re.IGNORECASE)
+
+LEGAL_DISCLAIMER_PATTERNS = [
+    r"\bDisclaimer\b",
+    r"\bTerms\s*(?:&|and)\s*Conditions\b",
+    r"\bNot\s+valid\s+for\s+medico-legal\b",
+    r"\bprovisional\s+in\s+nature\b",
+    r"\brecipient(?:'s|’s)?\s+use\s+only\b",
+    r"\bSubstitution\s+allowed\b",
+    r"\bLegal\s+Notice\b",
+]
+LEGAL_DISCLAIMER_RE = re.compile("|".join(LEGAL_DISCLAIMER_PATTERNS), re.IGNORECASE)
+
+
+def is_clinical_barrier(text: str) -> bool:
+    """Returns True if text contains a clinical section header or diagnostic barrier."""
+    if not text:
+        return False
+    clean = text.strip()
+    return bool(CLINICAL_BARRIER_RE.search(clean)) or is_whitelisted(clean)
+
+
+def is_legal_disclaimer(text: str) -> bool:
+    """Returns True if text matches legal boilerplate disclaimer vocabulary."""
+    if not text:
+        return False
+    clean = text.strip()
+    return bool(LEGAL_DISCLAIMER_RE.search(clean))
 
 
 def is_whitelisted(text: str) -> bool:

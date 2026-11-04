@@ -410,6 +410,18 @@ def parse_form_anchors_on_lines(
                     val_rect.x1 + 2,
                     min(split_bottom, val_rect.y1 + 2)
                 )
+
+                # Segment-aware bidirectional expansion within logical column segment
+                for seg in l_obj.get("segments", []):
+                    if not (seg["x1"] < val_rect.x0 - 4 or seg["x0"] > val_rect.x1 + 4):
+                        val_rect.x0 = min(val_rect.x0, seg["x0"])
+                        val_rect.x1 = max(val_rect.x1, seg["x1"])
+                        med_lh = seg.get("line_height", val_rect.height)
+                        pad_y = max(3.0, 0.22 * med_lh)
+                        val_rect.y0 = max(0.0, val_rect.y0 - pad_y)
+                        val_rect.y1 = min(search_page.rect.height, val_rect.y1 + pad_y)
+                        break
+
                 is_clinical_encroachment = False
                 if whitelisted_rects:
                     for wr in whitelisted_rects:

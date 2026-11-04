@@ -430,6 +430,8 @@ class TestPrescriptionAnonymizer(unittest.TestCase):
         old_low_mem = os.environ.get("RENDER_LOW_MEMORY")
         os.environ["RENDER_LOW_MEMORY"] = "1"
         try:
+            import api.server
+            api.server._image_engine = None
             client = TestClient(app)
             phone_dir = os.path.join(self.repo_dir, "data", "real_phone_prescriptions")
             files_to_test = [
@@ -469,10 +471,128 @@ class TestPrescriptionAnonymizer(unittest.TestCase):
             growth_1_to_2 = rss_readings[1] - rss_readings[0]
             self.assertLess(growth_1_to_2, 35.0, f"RSS grew unexpectedly between Request 1 and 2: +{growth_1_to_2:.2f} MB")
         finally:
+            import api.server
+            api.server._image_engine = None
             if old_low_mem is not None:
                 os.environ["RENDER_LOW_MEMORY"] = old_low_mem
             else:
                 os.environ.pop("RENDER_LOW_MEMORY", None)
+
+    def test_right_aligned_multiline_provider_block_propagation(self):
+        """
+        Verifies that right-aligned multi-line provider blocks with unlabelled qualification
+        and address lines are 100% masked end-to-end via scale-invariant vertical block propagation.
+        """
+        from PIL import Image, ImageDraw, ImageFont
+        img_w, img_h = 1000, 1200
+        img = Image.new("RGB", (img_w, img_h), color=(255, 255, 255))
+        draw = ImageDraw.Draw(img)
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 20)
+        except Exception:
+            font = ImageFont.load_default()
+
+        provider_lines = [
+            "Dr. John Doe, M.D.",
+            "Consultant Physician",
+            "452 Medical Plaza Blvd",
+            "Suite 300, New York, NY",
+            "Tel: (555) 019-2834"
+        ]
+        y = 60
+        for l in provider_lines:
+            bbox = draw.textbbox((0, 0), l, font=font)
+            text_w = bbox[2] - bbox[0]
+            x = 940 - text_w
+            draw.text((x, y), l, fill=(0, 0, 0), font=font)
+            y += 35
+
+        test_img = os.path.join(self.temp_dir, "test_provider_block.png")
+        out_pdf = os.path.join(self.temp_dir, "test_provider_block_out.pdf")
+        img.save(test_img)
+
+        redactor = LocalImageRedactor()
+        report = redactor.redact(test_img, out_pdf)
+        self.assertGreaterEqual(report["total_entities_redacted"], 3)
+
+        target_rects = [
+            pymupdf.Rect(t["bbox"]["x0"], t["bbox"]["y0"], t["bbox"]["x1"], t["bbox"]["y1"])
+            for t in report["redacted_targets"]
+        ]
+        scale = 1000.0 / 750.0
+        words = getattr(redactor, "_last_extracted_words", [])
+
+        # Verify key tokens across all 5 lines are masked
+        check_tokens = ["Dr.", "John", "Doe,", "Consultant", "Physician", "452", "Medical", "Plaza", "Suite", "York,", "Tel:", "019-2834"]
+        for tok in check_tokens:
+            matches = [w for w in words if w[4] == tok]
+            self.assertTrue(len(matches) > 0, f"Token {tok} not detected by OCR")
+            w = matches[0]
+            w_r = pymupdf.Rect(w[0] * scale, w[1] * scale, w[2] * scale, w[3] * scale)
+            is_masked = any(not (w_r & tr).is_empty and (w_r & tr).get_area() > 0.4 * w_r.get_area() for tr in target_rects)
+            self.assertTrue(is_masked, f"Provider token {tok} was not masked by block propagation")
+
+    def test_clinical_barrier_guard_and_disclaimer_immunity(self):
+        """
+        Verifies that adjacent clinical barrier sections ('Provisional Diagnosis', 'Lab Tests', 'Rx')
+        and legal disclaimer footer blocks remain 100% unredacted with zero false positives.
+        """
+        from PIL import Image, ImageDraw, ImageFont
+        img_w, img_h = 1000, 1200
+        img = Image.new("RGB", (img_w, img_h), color=(255, 255, 255))
+        draw = ImageDraw.Draw(img)
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 20)
+        except Exception:
+            font = ImageFont.load_default()
+
+        clinical_lines = [
+            "Provisional Diagnosis: Acute Bronchitis",
+            "Lab Tests: Complete Blood Count, Chest X-Ray",
+            "Rx: Amoxicillin 500mg, 1 tab TID"
+        ]
+        y = 300
+        for l in clinical_lines:
+            draw.text((60, y), l, fill=(0, 0, 0), font=font)
+            y += 45
+
+        disclaimer_lines = [
+            "Disclaimer: This electronic record is provisional in nature and not valid for medico-legal purposes.",
+            "Terms & Conditions apply. For recipient's use only. Substitution allowed."
+        ]
+        y = 950
+        for l in disclaimer_lines:
+            draw.text((60, y), l, fill=(50, 50, 50), font=font)
+            y += 35
+
+        test_img = os.path.join(self.temp_dir, "test_clinical_barrier.png")
+        out_pdf = os.path.join(self.temp_dir, "test_clinical_barrier_out.pdf")
+        img.save(test_img)
+
+        redactor = LocalImageRedactor()
+        report = redactor.redact(test_img, out_pdf)
+
+        target_rects = [
+            pymupdf.Rect(t["bbox"]["x0"], t["bbox"]["y0"], t["bbox"]["x1"], t["bbox"]["y1"])
+            for t in report["redacted_targets"]
+        ]
+        scale = 1000.0 / 750.0
+        words = getattr(redactor, "_last_extracted_words", [])
+
+        protected_tokens = [
+            "Provisional", "Diagnosis:", "Acute", "Bronchitis",
+            "Lab", "Tests:", "Complete", "Blood", "Count,", "Chest", "X-Ray",
+            "Rx:", "Amoxicillin", "500mg,",
+            "Disclaimer:", "provisional", "medico-legal",
+            "Terms", "Conditions", "recipient's"
+        ]
+        for tok in protected_tokens:
+            matches = [w for w in words if w[4] == tok]
+            self.assertTrue(len(matches) > 0, f"Token {tok} not detected by OCR")
+            w = matches[0]
+            w_r = pymupdf.Rect(w[0] * scale, w[1] * scale, w[2] * scale, w[3] * scale)
+            is_masked = any(not (w_r & tr).is_empty and (w_r & tr).get_area() > 0.4 * w_r.get_area() for tr in target_rects)
+            self.assertFalse(is_masked, f"Clinical/Disclaimer token {tok} was erroneously masked")
 
 
 if __name__ == "__main__":

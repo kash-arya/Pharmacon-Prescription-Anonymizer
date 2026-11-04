@@ -29,6 +29,9 @@ try:
         STATUTORY_ID_PATTERNS,
         is_whitelisted,
         _COMPILED_WHITELIST,
+        is_clinical_barrier,
+        is_legal_disclaimer,
+        BOUNDARY_LABEL_RE,
     )
     from prescription_anonymizer.src.vlm_grounder import MultimodalVisualGrounder
     from prescription_anonymizer.src.jurisdiction import JurisdictionDetector
@@ -38,6 +41,7 @@ try:
         get_ocr_languages,
         reconstruct_visual_lines,
         get_enhanced_fullpage_ocr,
+        normalize_ink_contrast,
     )
     from prescription_anonymizer.src.barcode_detector import detect_qr_and_barcodes
     from prescription_anonymizer.src.form_parser import (
@@ -55,6 +59,9 @@ except ImportError:
         STATUTORY_ID_PATTERNS,
         is_whitelisted,
         _COMPILED_WHITELIST,
+        is_clinical_barrier,
+        is_legal_disclaimer,
+        BOUNDARY_LABEL_RE,
     )
     from src.vlm_grounder import MultimodalVisualGrounder
     from src.jurisdiction import JurisdictionDetector
@@ -64,6 +71,7 @@ except ImportError:
         get_ocr_languages,
         reconstruct_visual_lines,
         get_enhanced_fullpage_ocr,
+        normalize_ink_contrast,
     )
     from src.barcode_detector import detect_qr_and_barcodes
     from src.form_parser import (
@@ -197,6 +205,8 @@ class LocalImageRedactor:
                 page_bgr = cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
             del pix, arr
 
+            page_bgr = normalize_ink_contrast(page_bgr, gamma=1.6)
+
             lab = cv2.cvtColor(page_bgr, cv2.COLOR_BGR2LAB)
             l, a, b = cv2.split(lab)
             kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (41, 41))
@@ -316,6 +326,44 @@ class LocalImageRedactor:
                (category.startswith("PATIENT_NAME") and not category.endswith("_LABEL")) or \
                (category.startswith("DOCTOR_NAME") and not category.endswith("_LABEL")):
                 rect = expand_person_span_on_line(rect, active_lines, is_whitelisted_fn=self.is_whitelisted)
+
+            # Mechanism 3: Bidirectional Segment Completion & Scale-Invariant Glyph Padding
+            pii_prefixes = (
+                "PATIENT", "DOCTOR", "CLINIC", "ADDRESS", "CONTACT", "IDENTIFIER",
+                "PHONE", "EMAIL", "UHID", "MRN", "OPD", "IPD", "STATUTORY", "ID_TOKEN",
+                "HEADER_PROVIDER", "HEADER_INSTITUTIONAL", "DISPENSING_PHARMACY", "PERSON",
+                "CITY_STATE", "PROVIDER_BLOCK"
+            )
+            is_pii_rule = any(category.startswith(pfx) or pfx in category for pfx in pii_prefixes)
+            if is_pii_rule and not category.endswith("_LABEL") and active_lines and text not in ("[HANDWRITTEN_SIGNATURE]", "[CHROMATIC_STAMP_SEAL]"):
+                r_mid_y = (rect.y0 + rect.y1) / 2.0
+                for line in active_lines:
+                    l_rect = line["rect"]
+                    if abs((l_rect.y0 + l_rect.y1) / 2.0 - r_mid_y) < max(12.0, l_rect.height * 0.6):
+                        for seg in line.get("segments", []):
+                            if not (seg["x1"] < rect.x0 - 4 or seg["x0"] > rect.x1 + 4):
+                                new_x0 = min(rect.x0, seg["x0"])
+                                new_x1 = max(rect.x1, seg["x1"])
+
+                                # Minus protected clinical tokens
+                                for wr in whitelisted_rects:
+                                    if abs((wr.y0 + wr.y1) / 2.0 - r_mid_y) < max(10.0, l_rect.height * 0.5):
+                                        if wr.x0 < new_x1 and wr.x1 > new_x0:
+                                            if (rect.x0 + rect.x1) / 2.0 < (wr.x0 + wr.x1) / 2.0:
+                                                new_x1 = min(new_x1, wr.x0 - 2.0)
+                                            else:
+                                                new_x0 = max(new_x0, wr.x1 + 2.0)
+
+                                if new_x1 > new_x0:
+                                    rect.x0 = new_x0
+                                    rect.x1 = new_x1
+
+                                med_lh = seg.get("line_height", l_rect.height)
+                                pad_y = max(3.0, 0.22 * med_lh)
+                                rect.y0 = max(0.0, rect.y0 - pad_y)
+                                rect.y1 = min(page.rect.height, rect.y1 + pad_y)
+                                break
+                        break
 
             if not can_redact(rect, text):
                 return
@@ -607,20 +655,28 @@ class LocalImageRedactor:
         # -------------------------------------------------------------------
         # 2b. Local spaCy NER for unanchored Persons, Locations, and Organizations
         # -------------------------------------------------------------------
+        def is_on_barrier_or_disclaimer_line(r: pymupdf.Rect, lines_list: List[Dict[str, Any]]) -> bool:
+            for l in lines_list:
+                if is_clinical_barrier(l["text"]) or is_legal_disclaimer(l["text"]):
+                    v_inter = min(r.y1, l["rect"].y1) - max(r.y0, l["rect"].y0)
+                    if v_inter > 0.4 * min(max(1.0, r.height), max(1.0, l["rect"].height)):
+                        return True
+            return False
+
         ner_candidates = self.ner_engine.find_entities(full_text)
         for cand in ner_candidates:
             matched_str = cand["text"]
             if not self.is_whitelisted(matched_str) and len(matched_str) >= 3:
                 rects = search_page_ref.search_for(matched_str, textpage=tp)
                 for r in rects:
-                    if is_in_clinical_zone(r):
+                    if is_in_clinical_zone(r) or is_on_barrier_or_disclaimer_line(r, line_objects):
                         continue
                     add_target(r, cand["category"], matched_str, engine="spacy_ner")
                 if not rects and len(matched_str.split()) > 1:
                     for part in matched_str.split():
                         if len(part) >= 4 and not self.is_whitelisted(part):
                             for pr in search_page_ref.search_for(part, textpage=tp):
-                                if is_in_clinical_zone(pr):
+                                if is_in_clinical_zone(pr) or is_on_barrier_or_disclaimer_line(pr, line_objects):
                                     continue
                                 add_target(pr, cand["category"], part, engine="spacy_ner_part")
 
@@ -715,14 +771,14 @@ class LocalImageRedactor:
                         if not self.is_whitelisted(matched_str) and len(matched_str) >= 3:
                             rects = p_enh.search_for(matched_str, textpage=tp_enh)
                             for r in rects:
-                                if is_in_clinical_zone(r):
+                                if is_in_clinical_zone(r) or is_on_barrier_or_disclaimer_line(r, line_objects_enh):
                                     continue
                                 add_target(r, f"{cand['category']}_ENHANCED", matched_str, engine="spacy_ner_clahe")
                             if not rects and len(matched_str.split()) > 1:
                                 for part in matched_str.split():
                                     if len(part) >= 4 and not self.is_whitelisted(part):
                                         for pr in p_enh.search_for(part, textpage=tp_enh):
-                                            if is_in_clinical_zone(pr):
+                                            if is_in_clinical_zone(pr) or is_on_barrier_or_disclaimer_line(pr, line_objects_enh):
                                                 continue
                                             add_target(pr, f"{cand['category']}_ENHANCED", part, engine="spacy_ner_clahe_part")
             except Exception:
@@ -864,6 +920,165 @@ class LocalImageRedactor:
                     else:
                         break
 
+        # -------------------------------------------------------------------
+        # 5b. Scale-Invariant Vertical PII Block Propagation (With Clinical Barrier)
+        # -------------------------------------------------------------------
+        if line_objects:
+            all_segs = []
+            for l_idx, line in enumerate(line_objects):
+                l_text = line["text"]
+                l_is_barrier = is_clinical_barrier(l_text)
+                for seg in line.get("segments", []):
+                    seg_rect = seg["rect"]
+                    seg_text = seg["text"]
+                    seg_is_barrier = l_is_barrier or is_clinical_barrier(seg_text)
+
+                    has_pii = False
+                    pii_cats = []
+                    for t in targets:
+                        t_r = pymupdf.Rect(t.bbox.x0, t.bbox.y0, t.bbox.x1, t.bbox.y1)
+                        inter = seg_rect & t_r
+                        if not inter.is_empty and inter.get_area() > 0.15 * min(seg_rect.get_area(), t_r.get_area()):
+                            has_pii = True
+                            pii_cats.append(t.category)
+
+                    all_segs.append({
+                        "line_idx": l_idx,
+                        "seg": seg,
+                        "rect": seg_rect,
+                        "text": seg_text,
+                        "line_height": seg.get("line_height", seg_rect.height),
+                        "has_pii": has_pii,
+                        "pii_cats": pii_cats,
+                        "is_barrier": seg_is_barrier,
+                    })
+
+            # Cluster consecutive segments into Vertical Layout Blocks
+            blocks: List[List[Dict[str, Any]]] = []
+            visited = set()
+
+            for i, seg_a in enumerate(all_segs):
+                if i in visited or seg_a["is_barrier"]:
+                    continue
+
+                curr_block = [seg_a]
+                visited.add(i)
+                curr_last = seg_a
+
+                curr_line_idx = curr_last["line_idx"]
+                while True:
+                    next_line_idx = curr_line_idx + 1
+                    candidates = [
+                        (idx, s) for idx, s in enumerate(all_segs)
+                        if s["line_idx"] == next_line_idx and idx not in visited
+                    ]
+                    if not candidates:
+                        break
+
+                    matched_cand = None
+                    for c_idx, seg_b in candidates:
+                        # STRICT CLINICAL BARRIER: Immediately HALT if next line is a clinical barrier
+                        if seg_b["is_barrier"]:
+                            matched_cand = None
+                            break
+
+                        # 1. Vertical gap < 1.35 * max(h_curr, h_next)
+                        h_curr = curr_last["line_height"]
+                        h_next = seg_b["line_height"]
+                        max_h = max(h_curr, h_next)
+                        v_gap = seg_b["rect"].y0 - curr_last["rect"].y1
+                        if not (-5.0 <= v_gap < 1.35 * max_h):
+                            continue
+
+                        # 2. Alignment: Left, Right, OR Center within 1.2 * max(h_curr, h_next)
+                        align_tol = 1.2 * max_h
+                        left_align = abs(curr_last["rect"].x0 - seg_b["rect"].x0) <= align_tol
+                        right_align = abs(curr_last["rect"].x1 - seg_b["rect"].x1) <= align_tol
+                        center_curr = (curr_last["rect"].x0 + curr_last["rect"].x1) / 2.0
+                        center_b = (seg_b["rect"].x0 + seg_b["rect"].x1) / 2.0
+                        center_align = abs(center_curr - center_b) <= align_tol
+
+                        if left_align or right_align or center_align:
+                            matched_cand = (c_idx, seg_b)
+                            break
+
+                    if matched_cand is not None:
+                        c_idx, seg_b = matched_cand
+                        curr_block.append(seg_b)
+                        visited.add(c_idx)
+                        curr_last = seg_b
+                        curr_line_idx = next_line_idx
+                    else:
+                        break
+
+                if len(curr_block) >= 2:
+                    blocks.append(curr_block)
+
+            # Safe Propagation Rule: If block contains >= 2 distinct PII lines, propagate masking
+            for block in blocks:
+                distinct_pii_lines = set(s["line_idx"] for s in block if s["has_pii"])
+                if len(distinct_pii_lines) >= 2:
+                    block_x0 = min(s["rect"].x0 for s in block)
+                    block_x1 = max(s["rect"].x1 for s in block)
+                    is_provider_block = any(any("DOCTOR" in c or "PROVIDER" in c for c in s["pii_cats"]) for s in block)
+                    for s in block:
+                        s_text = s["text"].strip()
+                        if self.is_whitelisted(s_text) or s["is_barrier"]:
+                            continue
+                        pad_y = max(3.0, 0.22 * s["line_height"])
+                        p_rect = pymupdf.Rect(
+                            max(0, min(s["rect"].x0, block_x0) - 2),
+                            max(0, s["rect"].y0 - pad_y),
+                            min(page.rect.width, max(s["rect"].x1, block_x1) + 2),
+                            min(page.rect.height, s["rect"].y1 + pad_y)
+                        )
+                        has_clin_overlap = False
+                        for wr in whitelisted_rects:
+                            inter = p_rect & wr
+                            if not inter.is_empty and inter.get_area() > 0.15 * min(p_rect.get_area(), wr.get_area()):
+                                has_clin_overlap = True
+                                break
+                        if not has_clin_overlap:
+                            prop_cat = "PROVIDER_BLOCK" if is_provider_block else "PII_BLOCK_PROPAGATED"
+                            add_target(p_rect, prop_cat, s_text, engine="vertical_block_propagation")
+
+        # -------------------------------------------------------------------
+        # 5c. Vocabulary-Gated Legal Disclaimer Immunity
+        # -------------------------------------------------------------------
+        disclaimer_lines = [
+            l for l in line_objects
+            if is_legal_disclaimer(l["text"])
+        ]
+        if disclaimer_lines:
+            disclaimer_zones = []
+            for dl in disclaimer_lines:
+                d_rect = dl["rect"]
+                d_y0 = max(0, d_rect.y0 - 4.0)
+                d_y1 = min(page.rect.height, d_rect.y1 + 4.0)
+                for l in line_objects:
+                    if l["rect"].y0 >= d_rect.y0 and l["rect"].y1 <= d_rect.y1 + dl.get("line_height", 14.0) * 3.5:
+                        d_y1 = max(d_y1, l["rect"].y1 + 4.0)
+                disclaimer_zones.append(pymupdf.Rect(0, d_y0, page.rect.width, d_y1))
+
+            strict_regex_categories = {
+                "PHONE", "CONTACT_PHONE", "EMAIL", "CONTACT_EMAIL", "URL", "BARCODE", "BARCODE_OR_QR"
+            }
+            filtered_targets = []
+            for t in targets:
+                t_r = pymupdf.Rect(t.bbox.x0, t.bbox.y0, t.bbox.x1, t.bbox.y1)
+                in_disclaimer = any(not (t_r & dz).is_empty for dz in disclaimer_zones)
+                if in_disclaimer:
+                    raw_t = t.raw_text or ""
+                    is_strict_contact = (
+                        t.category in strict_regex_categories or
+                        bool(re.search(r"@|\b(?:\+?91[\-\s]?)?[6-9]\d{9}\b|\b\d{3}[\-\s.]\d{3}[\-\s.]\d{4}\b|https?://", raw_t))
+                    )
+                    if is_strict_contact:
+                        filtered_targets.append(t)
+                else:
+                    filtered_targets.append(t)
+            targets = filtered_targets
+
         try:
             if tmp_ocr_doc is not None:
                 tmp_ocr_doc.close()
@@ -935,6 +1150,9 @@ class LocalImageRedactor:
                     new_h = max(1, int(round(orig_h * scale)))
                     img_bgr = cv2.resize(img_bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
+                # Pre-OCR Ink Normalization
+                img_bgr = normalize_ink_contrast(img_bgr, gamma=1.6)
+
                 # Fast Pre-OCR Contrast Normalization:
                 lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
                 l, a, b = cv2.split(lab)
@@ -952,9 +1170,11 @@ class LocalImageRedactor:
                     pdf_bytes = img_doc.convert_to_pdf()
                 del enc, proc_bgr, img_bgr
             else:
-                with pymupdf.open(input_path) as img_doc:
+                img_bgr = normalize_ink_contrast(img_bgr, gamma=1.6)
+                _, enc = cv2.imencode(".png", img_bgr)
+                with pymupdf.open("png", enc.tobytes()) as img_doc:
                     pdf_bytes = img_doc.convert_to_pdf()
-                del img_bgr
+                del enc, img_bgr
             doc = pymupdf.open("pdf", pdf_bytes)
             page = doc[0]
 
