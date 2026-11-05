@@ -36,4 +36,4 @@ ENV PYTHONUNBUFFERED=1 \
     NUMEXPR_NUM_THREADS=1 \
     TESSDATA_PREFIX=/app/data/tessdata
 
-CMD ["uvicorn", "api.server:app", "--host", "0.0.0.0", "--port", "10000", "--workers", "1"]
+CMD ["uvicorn", "api.server:app", "--host", "0.0.0.0", "--port", "10000", "--workers", "1", "--timeout-keep-alive", "120", "--limit-concurrency", "2"]

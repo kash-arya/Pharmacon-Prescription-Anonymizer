@@ -7,7 +7,7 @@ services:
     healthCheckPath: /health
     envVars:
       - key: PORT
-        value: 8000
+        value: "10000"
       - key: PYTHONUNBUFFERED
         value: "1"
       - key: RENDER_LOW_MEMORY

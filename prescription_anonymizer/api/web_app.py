@@ -1431,16 +1431,11 @@ def get_web_app_html() -> str:
 """
 
 
-def __getattr__(name: str):
-    """
-    Exposes FastAPI application instance directly from `api.web_app`
-    ensuring `from api.web_app import app` mounts the identical application.
-    """
-    if name == "app":
-        try:
-            from api.server import app as _server_app
-            return _server_app
-        except ImportError:
-            from prescription_anonymizer.api.server import app as _server_app
-            return _server_app
-    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
+# Clean direct application export ensuring `from api.web_app import app` works reliably without dynamic __getattr__
+try:
+    from api.server import app
+except ImportError:
+    try:
+        from prescription_anonymizer.api.server import app
+    except ImportError:
+        app = None

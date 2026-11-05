@@ -1128,31 +1128,42 @@ class LocalImageRedactor:
         if is_image_input:
             self._is_current_file_image = True
             is_low_mem = os.environ.get("RENDER_LOW_MEMORY") == "1"
-            img_bgr = cv2.imread(input_path)
-            if img_bgr is None:
-                with Image.open(input_path) as pil_img:
-                    orig_w, orig_h = pil_img.size
-                    img_bgr = cv2.cvtColor(np.array(pil_img.convert("RGB")), cv2.COLOR_RGB2BGR)
+
+            # Probe true image dimensions without full uncompressed decode
+            with Image.open(input_path) as probe:
+                orig_w, orig_h = probe.size
+
+            # In low-memory mode on large photos (>= 4000px), use reduced decode to cap peak allocation < 20MB
+            if is_low_mem and max(orig_w, orig_h) >= 4000:
+                img_bgr = cv2.imread(input_path, cv2.IMREAD_REDUCED_COLOR_2)
+                if img_bgr is None:
+                    with Image.open(input_path) as pil_img:
+                        pil_img.draft("RGB", (orig_w // 2, orig_h // 2))
+                        img_bgr = cv2.cvtColor(np.array(pil_img.convert("RGB")), cv2.COLOR_RGB2BGR)
             else:
-                orig_h, orig_w = img_bgr.shape[:2]
+                img_bgr = cv2.imread(input_path)
+                if img_bgr is None:
+                    with Image.open(input_path) as pil_img:
+                        img_bgr = cv2.cvtColor(np.array(pil_img.convert("RGB")), cv2.COLOR_RGB2BGR)
+
+            cur_h, cur_w = img_bgr.shape[:2]
+            target_max = 1350 if is_low_mem else None
+            if target_max and max(cur_w, cur_h) > target_max:
+                scale = float(target_max) / max(cur_w, cur_h)
+                new_w = max(1, int(round(cur_w * scale)))
+                new_h = max(1, int(round(cur_h * scale)))
+                img_bgr = cv2.resize(img_bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            elif is_low_mem and max(cur_w, cur_h) < 700:
+                target_dim = 1785 if min(cur_w, cur_h) < 400 else 1000
+                scale = float(target_dim) / max(cur_w, cur_h)
+                new_w = max(1, int(round(cur_w * scale)))
+                new_h = max(1, int(round(cur_h * scale)))
+                img_bgr = cv2.resize(img_bgr, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+
+            # Pre-OCR Ink Normalization on scaled working canvas
+            img_bgr = normalize_ink_contrast(img_bgr, gamma=1.6)
 
             if is_low_mem:
-                # Tiny Image Upscaling:
-                if max(orig_w, orig_h) < 700:
-                    target_dim = 1785 if min(orig_w, orig_h) < 400 else 1000
-                    scale = float(target_dim) / max(orig_w, orig_h)
-                    new_w = max(1, int(round(orig_w * scale)))
-                    new_h = max(1, int(round(orig_h * scale)))
-                    img_bgr = cv2.resize(img_bgr, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
-                elif max(orig_w, orig_h) > 1350:
-                    scale = 1350.0 / max(orig_w, orig_h)
-                    new_w = max(1, int(round(orig_w * scale)))
-                    new_h = max(1, int(round(orig_h * scale)))
-                    img_bgr = cv2.resize(img_bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
-
-                # Pre-OCR Ink Normalization
-                img_bgr = normalize_ink_contrast(img_bgr, gamma=1.6)
-
                 # Fast Pre-OCR Contrast Normalization:
                 lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
                 l, a, b = cv2.split(lab)
@@ -1170,7 +1181,6 @@ class LocalImageRedactor:
                     pdf_bytes = img_doc.convert_to_pdf()
                 del enc, proc_bgr, img_bgr
             else:
-                img_bgr = normalize_ink_contrast(img_bgr, gamma=1.6)
                 _, enc = cv2.imencode(".png", img_bgr)
                 with pymupdf.open("png", enc.tobytes()) as img_doc:
                     pdf_bytes = img_doc.convert_to_pdf()

@@ -31,6 +31,7 @@ def normalize_ink_contrast(img: np.ndarray, gamma: float = 1.6) -> np.ndarray:
     Compresses faint/mid-grey digital ink (Luminance 130..235 on bright backgrounds
     where 75th percentile > 205) toward dark foreground ink via adaptive gamma darkening (gamma=1.6)
     so Tesseract never drops light-grey sub-headers, emails, or registration numbers.
+    Uses a pure uint8 cv2.LUT to eliminate float32 memory spikes and execution overhead.
     """
     if img is None or img.size == 0:
         return img
@@ -41,22 +42,16 @@ def normalize_ink_contrast(img: np.ndarray, gamma: float = 1.6) -> np.ndarray:
         else:
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     else:
-        gray = img.copy()
+        gray = img
 
-    p75 = float(np.percentile(gray, 75))
+    # Compute 75th percentile instantaneously on step-sliced sample
+    sample = gray[::8, ::8] if gray.shape[0] > 64 and gray.shape[1] > 64 else gray
+    p75 = float(np.percentile(sample, 75))
     if p75 > 205.0:
-        table = np.array([((i / 255.0) ** gamma) * 255.0 for i in range(256)]).astype("uint8")
-        darkened = cv2.LUT(gray, table)
-
-        mid_mask = (gray >= 130) & (gray <= 235)
-        out_gray = gray.copy()
-        out_gray[mid_mask] = darkened[mid_mask]
-
-        if len(img.shape) == 3:
-            ratio = out_gray.astype(np.float32) / np.maximum(1.0, gray.astype(np.float32))
-            out_img = np.clip(img.astype(np.float32) * ratio[:, :, np.newaxis], 0, 255).astype(np.uint8)
-            return out_img
-        return out_gray
+        lut = np.arange(256, dtype=np.uint8)
+        for i in range(130, 236):
+            lut[i] = np.uint8(np.clip(round(((i / 255.0) ** gamma) * 255.0), 0, 255))
+        return cv2.LUT(img, lut)
 
     return img
 
