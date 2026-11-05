@@ -188,7 +188,7 @@ def get_web_app_html() -> str:
 
       </div>
 
-      <!-- Queue Progress Card -->
+      <!-- Queue Progress Card (Visible during processing or when multiple files queued) -->
       <div id="queue-card" class="hidden bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
         <div class="flex items-center justify-between flex-wrap gap-3">
           <div class="flex items-center gap-3">
@@ -220,7 +220,7 @@ def get_web_app_html() -> str:
         </div>
       </div>
 
-      <!-- Batch Document Strip / Gallery -->
+      <!-- Batch Document Strip / Gallery (Visible when multiple documents are queued) -->
       <div id="gallery-container" class="hidden space-y-2">
         <div class="flex items-center justify-between">
           <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Document Gallery</h3>
@@ -231,7 +231,7 @@ def get_web_app_html() -> str:
         </div>
       </div>
 
-      <!-- Active Document Inspector Section -->
+      <!-- Active Document Inspector Section (Prominently displayed) -->
       <div id="result-section" class="hidden space-y-6">
 
         <!-- Summary KPI Bar -->
@@ -264,14 +264,14 @@ def get_web_app_html() -> str:
         </div>
 
         <!-- Clinical Gate Rejection Card (Visible when triage_status === "NOT_A_PRESCRIPTION") -->
-        <div id="gate-alert-card" class="hidden bg-gradient-to-r from-amber-950/50 to-slate-900 border-2 border-amber-500/60 rounded-2xl p-6 shadow-xl space-y-4">
+        <div id="gate-alert-card" class="hidden bg-gradient-to-r from-amber-950/60 to-slate-900 border-2 border-amber-500/60 rounded-2xl p-6 shadow-xl space-y-4">
           <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-            <div class="space-y-1">
+            <div class="space-y-1.5">
               <div class="inline-flex items-center gap-2 px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
                 <span>⚠️</span> NOT A PRESCRIPTION — SKIPPED
               </div>
-              <h3 class="text-base font-bold text-slate-100">Clinical Gate Exclusion</h3>
-              <p id="gate-reason-text" class="text-xs text-slate-300 font-mono">
+              <h3 class="text-base font-bold text-slate-100">Clinical Gatekeeper Verdict</h3>
+              <p id="gate-reason-text" class="text-xs text-amber-200/90 font-mono">
                 Document scored below clinical prescription gate threshold.
               </p>
               <p class="text-[11px] text-slate-400">
@@ -285,7 +285,7 @@ def get_web_app_html() -> str:
         </div>
 
         <!-- Failure Details Card (Visible when status === "failed") -->
-        <div id="failed-alert-card" class="hidden bg-gradient-to-r from-red-950/50 to-slate-900 border-2 border-red-500/60 rounded-2xl p-6 shadow-xl space-y-3">
+        <div id="failed-alert-card" class="hidden bg-gradient-to-r from-red-950/60 to-slate-900 border-2 border-red-500/60 rounded-2xl p-6 shadow-xl space-y-3">
           <div class="inline-flex items-center gap-2 px-2.5 py-0.5 rounded-full text-xs font-bold bg-red-500/20 text-red-300 border border-red-500/40">
             <span>✕</span> PROCESSING FAILED
           </div>
@@ -295,7 +295,7 @@ def get_web_app_html() -> str:
           </p>
         </div>
 
-        <!-- Split Slider Inspection Viewer (Visible when document is redacted) -->
+        <!-- Split Slider Inspection Viewer (Visible when document is redacted or previewed) -->
         <div id="split-inspection-card" class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
           <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
             <div>
@@ -545,7 +545,6 @@ def get_web_app_html() -> str:
           );
         });
       };
-      // Chromium caps single readEntries() call at 100 items. Loop until empty array.
       while (true) {
         const batch = await readBatch();
         if (!batch || batch.length === 0) break;
@@ -708,6 +707,8 @@ def get_web_app_html() -> str:
         return;
       }
 
+      const isSingleUpload = (fileQueue.length === 0 && validFiles.length === 1);
+
       for (const f of validFiles) {
         fileQueue.push({
           file: f,
@@ -729,7 +730,12 @@ def get_web_app_html() -> str:
         });
       }
 
-      renderQueueGallery();
+      if (isSingleUpload) {
+        // For single file, keep gallery strip hidden to preserve clean single-document UX
+        galleryContainer.classList.add('hidden');
+      } else {
+        renderQueueGallery();
+      }
       updateQueueProgress();
 
       if (!isQueueRunning) {
@@ -794,7 +800,12 @@ def get_web_app_html() -> str:
             }
             item.resultData = data || { triage_status: 'NOT_A_PRESCRIPTION', review_reasons: item.reviewReasons };
           } else if (!res.ok) {
-            const errMsg = (data && data.detail) ? data.detail : (res.status === 502 || res.status === 504 ? `Server memory limit exceeded (HTTP ${res.status}).` : `Server error (HTTP ${res.status}): ${rawText.slice(0, 140)}`);
+            // Truthful server error display - eliminate false "Server memory limit" assumption
+            const errMsg = (data && data.detail)
+              ? (typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail))
+              : (data && data.reason)
+                ? data.reason
+                : `Server error (HTTP ${res.status}): ${rawText.slice(0, 160)}`;
             throw new Error(errMsg);
           } else if (data) {
             item.status = 'completed';
@@ -803,7 +814,7 @@ def get_web_app_html() -> str:
             item.totalEntities = data.total_entities_redacted || 0;
             item.anonymizedFilename = data.anonymized_filename || ('anonymized_' + item.file.name);
 
-            // Memory-Safe Blob Conversion: discard Base64 strings immediately
+            // Memory-Safe Blob Conversion: discard raw Base64 strings immediately
             item.origBlobUrl = base64ToBlobUrl(data.original_image_base64 || data.original_image, 'image/png');
             item.redBlobUrl = base64ToBlobUrl(data.redacted_image_base64 || data.redacted_image, 'image/png');
             item.downloadBlobUrl = base64ToBlobUrl(data.download_file_base64 || data.data_uri, data.mime_type || 'application/pdf');
@@ -833,6 +844,7 @@ def get_web_app_html() -> str:
           abortController = null;
         }
 
+        // UX Restoration: automatically display the first completed/processed document immediately
         if (selectedQueueIndex === -1) {
           selectQueueItem(i);
         } else if (selectedQueueIndex === i) {
@@ -879,7 +891,10 @@ def get_web_app_html() -> str:
         try { data = JSON.parse(rawText); } catch (_) {}
 
         if (!res.ok) {
-          throw new Error((data && data.detail) || `Server error (HTTP ${res.status}): ${rawText.slice(0, 140)}`);
+          const errMsg = (data && data.detail)
+            ? (typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail))
+            : `Server error (HTTP ${res.status}): ${rawText.slice(0, 160)}`;
+          throw new Error(errMsg);
         }
 
         if (data) {
@@ -948,8 +963,12 @@ def get_web_app_html() -> str:
         return;
       }
 
-      galleryContainer.classList.remove('hidden');
-      galleryCount.innerText = `${total} Document${total === 1 ? '' : 's'}`;
+      if (total > 1) {
+        galleryContainer.classList.remove('hidden');
+        galleryCount.innerText = `${total} Document${total === 1 ? '' : 's'}`;
+      } else {
+        galleryContainer.classList.add('hidden');
+      }
 
       let completedCount = 0;
       let skippedCount = 0;
@@ -1001,7 +1020,7 @@ def get_web_app_html() -> str:
 
     // Render Batch Document Gallery Strip
     function renderQueueGallery() {
-      if (fileQueue.length === 0) {
+      if (fileQueue.length <= 1) {
         galleryStrip.innerHTML = '';
         return;
       }
@@ -1375,7 +1394,11 @@ def get_web_app_html() -> str:
           } catch (_) {
             err = null;
           }
-          const errMsg = (err && err.detail) ? err.detail : (res.status === 502 || res.status === 504 ? `Server resource limit reached (HTTP ${res.status}). The container was restarted due to memory constraints.` : `Server error (HTTP ${res.status}): ${rawText.slice(0, 160)}`);
+          const errMsg = (err && err.detail)
+            ? (typeof err.detail === 'string' ? err.detail : JSON.stringify(err.detail))
+            : (err && err.reason)
+              ? err.reason
+              : `Server error (HTTP ${res.status}): ${rawText.slice(0, 160)}`;
           throw new Error(errMsg);
         }
 
@@ -1406,3 +1429,18 @@ def get_web_app_html() -> str:
 </body>
 </html>
 """
+
+
+def __getattr__(name: str):
+    """
+    Exposes FastAPI application instance directly from `api.web_app`
+    ensuring `from api.web_app import app` mounts the identical application.
+    """
+    if name == "app":
+        try:
+            from api.server import app as _server_app
+            return _server_app
+        except ImportError:
+            from prescription_anonymizer.api.server import app as _server_app
+            return _server_app
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")

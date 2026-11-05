@@ -730,6 +730,62 @@ class TestPrescriptionAnonymizer(unittest.TestCase):
         self.assertNotIn("Evergreen", raw_json)
         self.assertNotIn("555-0199", raw_json)
 
+    def test_web_app_integration_suite(self):
+        """
+        Verifies that mounting `app` from `api.web_app` directly provides full
+        FastAPI endpoint compatibility for preview, clinical gate, and force override:
+        1. A real raster prescription (.png/.jpg) -> HTTP 200, triage != NOT_A_PRESCRIPTION, redacted_count > 0, non-null redacted_image_base64
+        2. A non-prescription image (synthetic timetable/invoice .png) -> HTTP 200 (NOT 500!), triage == NOT_A_PRESCRIPTION
+        3. The same non-prescription image with ?force_prescription=true -> HTTP 200, triage != NOT_A_PRESCRIPTION, non-null redacted_image_base64
+        """
+        from api.web_app import app as web_app
+        from fastapi.testclient import TestClient
+        from PIL import Image, ImageDraw
+
+        client = TestClient(web_app)
+
+        # 1. Real raster prescription (.png)
+        real_rx_path = os.path.join(self.repo_dir, "data", "samples", "extracted_images", "sample_prescription_1_p1.png")
+        if not os.path.exists(real_rx_path):
+            real_rx_path = os.path.join(self.repo_dir, "data", "raw_public_slips", "prescription_00006.png")
+        with open(real_rx_path, "rb") as f:
+            rx_bytes = f.read()
+
+        res_rx = client.post("/api/v1/anonymize/preview", files={"file": ("prescription_sample.png", rx_bytes, "image/png")})
+        self.assertEqual(res_rx.status_code, 200)
+        data_rx = res_rx.json()
+        self.assertNotEqual(data_rx.get("triage_status"), "NOT_A_PRESCRIPTION")
+        self.assertGreater(data_rx.get("total_entities_redacted", 0), 0)
+        self.assertIsNotNone(data_rx.get("redacted_image_base64"))
+        self.assertIsNotNone(data_rx.get("download_file_base64"))
+
+        # 2. Non-prescription image (synthetic timetable .png)
+        tt_img = Image.new("RGB", (900, 700), (255, 255, 255))
+        d = ImageDraw.Draw(tt_img)
+        d.text((50, 50), "Department of Computer Science - Semester V Timetable", fill=(0, 0, 0))
+        d.text((50, 100), "Monday: Distributed Systems (Room 301)", fill=(0, 0, 0))
+        d.text((50, 150), "Tuesday: Compiler Design Lab (Lab 4)", fill=(0, 0, 0))
+        d.text((50, 200), "Wednesday: Database Management (Room 204)", fill=(0, 0, 0))
+        tt_path = os.path.join(self.temp_dir, "3Q15_Timetable_SemV.png")
+        tt_img.save(tt_path)
+        with open(tt_path, "rb") as f:
+            tt_bytes = f.read()
+
+        res_tt = client.post("/api/v1/anonymize/preview", files={"file": ("3Q15_Timetable_SemV.png", tt_bytes, "image/png")})
+        self.assertEqual(res_tt.status_code, 200, f"Expected 200, got {res_tt.status_code}: {res_tt.text}")
+        data_tt = res_tt.json()
+        self.assertEqual(data_tt.get("triage_status"), "NOT_A_PRESCRIPTION")
+        self.assertEqual(data_tt.get("total_entities_redacted", 0), 0)
+        self.assertIsNone(data_tt.get("redacted_image_base64"))
+
+        # 3. Same non-prescription image with ?force_prescription=true
+        res_tt_force = client.post("/api/v1/anonymize/preview?force_prescription=true", files={"file": ("3Q15_Timetable_SemV.png", tt_bytes, "image/png")})
+        self.assertEqual(res_tt_force.status_code, 200)
+        data_tt_force = res_tt_force.json()
+        self.assertNotEqual(data_tt_force.get("triage_status"), "NOT_A_PRESCRIPTION")
+        self.assertIsNotNone(data_tt_force.get("redacted_image_base64"))
+        self.assertIsNotNone(data_tt_force.get("download_file_base64"))
+
 
 if __name__ == "__main__":
     unittest.main()

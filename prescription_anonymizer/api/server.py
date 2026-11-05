@@ -465,6 +465,10 @@ async def anonymize_prescription(
         content = await file.read()
         if not content:
             raise HTTPException(status_code=400, detail="Uploaded file is empty (0 bytes).")
+        try:
+            await file.seek(0)
+        except Exception:
+            pass
 
         is_valid_sig, _ = validate_file_signature(filename, content[:16])
         if not is_valid_sig:
@@ -597,6 +601,10 @@ async def anonymize_prescription_file_download(
         content = await file.read()
         if not content:
             raise HTTPException(status_code=400, detail="Uploaded file is empty (0 bytes).")
+        try:
+            await file.seek(0)
+        except Exception:
+            pass
 
         is_valid_sig, _ = validate_file_signature(filename, content[:16])
         if not is_valid_sig:
@@ -696,6 +704,10 @@ async def anonymize_prescription_preview(
         content = await file.read()
         if not content:
             raise HTTPException(status_code=400, detail="Uploaded file is empty (0 bytes).")
+        try:
+            await file.seek(0)
+        except Exception:
+            pass
 
         is_valid_sig, _ = validate_file_signature(filename, content[:16])
         if not is_valid_sig:
@@ -749,6 +761,9 @@ async def anonymize_prescription_preview(
                     "data_uri": None
                 }
             )
+
+        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+            raise HTTPException(status_code=500, detail="Sanitized file output was not generated or is empty.")
 
         is_low_mem = os.environ.get("RENDER_LOW_MEMORY") == "1"
         preview_dpi = 80 if is_low_mem else 150

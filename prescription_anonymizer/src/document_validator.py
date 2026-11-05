@@ -197,6 +197,9 @@ def record_gate_override_telemetry(
         "gate_score_before_override": round(float(gate_score), 2),
         "redacted_count": int(redacted_count)
     }
-    with open(log_path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry) + "\n")
+    try:
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        pass
 
