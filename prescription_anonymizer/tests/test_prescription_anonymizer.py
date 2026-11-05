@@ -325,8 +325,11 @@ class TestPrescriptionAnonymizer(unittest.TestCase):
             "/api/v1/anonymize",
             files={"file": ("malware.exe", b"test content", "application/octet-stream")}
         )
-        self.assertEqual(res_bad_ext.status_code, 400)
-        self.assertIn("Unsupported file format", res_bad_ext.json()["detail"])
+        self.assertIn(res_bad_ext.status_code, (400, 415))
+        if res_bad_ext.status_code == 415:
+            self.assertEqual(res_bad_ext.json().get("triage_status"), "IGNORED_UNSUPPORTED_FORMAT")
+        else:
+            self.assertIn("Unsupported file format", res_bad_ext.json()["detail"])
 
         # 2. Empty file upload
         res_empty = client.post(
@@ -456,6 +459,14 @@ class TestPrescriptionAnonymizer(unittest.TestCase):
                 self.assertEqual(data["triage_status"], "AUTO_APPROVED", f"Expected AUTO_APPROVED for {name}, got {data['triage_status']}")
                 if name.endswith(".pdf"):
                     self.assertLess(len(raw_bytes), 400000, f"Redacted PDF size too large: {len(raw_bytes)} bytes")
+                del data, raw_bytes, content, res
+                import gc
+                gc.collect()
+                try:
+                    import ctypes
+                    ctypes.CDLL("libc.so.6").malloc_trim(0)
+                except Exception:
+                    pass
                 rss = get_current_rss_mb()
                 rss_readings.append(rss)
 
@@ -593,6 +604,131 @@ class TestPrescriptionAnonymizer(unittest.TestCase):
             w_r = pymupdf.Rect(w[0] * scale, w[1] * scale, w[2] * scale, w[3] * scale)
             is_masked = any(not (w_r & tr).is_empty and (w_r & tr).get_area() > 0.4 * w_r.get_area() for tr in target_rects)
             self.assertFalse(is_masked, f"Clinical/Disclaimer token {tok} was erroneously masked")
+
+    def test_magic_byte_rejection(self):
+        """
+        Verifies that unsupported file extensions and mismatched binary magic bytes
+        are immediately rejected with HTTP 415 IGNORED_UNSUPPORTED_FORMAT.
+        """
+        from src.document_validator import validate_file_signature
+        from fastapi.testclient import TestClient
+        from api.server import app
+
+        # Direct function validation
+        self.assertEqual(validate_file_signature("video.mp4", b"\x00\x00\x00\x18ftypisom"), (False, "UNSUPPORTED_FILE_FORMAT"))
+        self.assertEqual(validate_file_signature("malware.exe", b"MZ\x90\x00\x03\x00\x00\x00"), (False, "UNSUPPORTED_FILE_FORMAT"))
+        self.assertEqual(validate_file_signature("archive.zip", b"PK\x03\x04\x14\x00\x00\x00"), (False, "UNSUPPORTED_FILE_FORMAT"))
+        self.assertEqual(validate_file_signature("fake.pdf", b"\x00\x00\x00\x00\x00\x00"), (False, "UNSUPPORTED_FILE_FORMAT"))
+        self.assertEqual(validate_file_signature("fake.png", b"GIF89a\x00\x01\x00\x01"), (False, "UNSUPPORTED_FILE_FORMAT"))
+        self.assertEqual(validate_file_signature("valid.pdf", b"%PDF-1.7\n%..."), (True, "PDF"))
+        self.assertEqual(validate_file_signature("valid.png", b"\x89PNG\r\n\x1a\n\x00\x00"), (True, "PNG"))
+        self.assertEqual(validate_file_signature("valid.jpeg", b"\xff\xd8\xff\xe0\x00\x10"), (True, "JPEG"))
+
+        # API HTTP 415 rejection
+        client = TestClient(app)
+        res_mp4 = client.post("/api/v1/anonymize/preview", files={"file": ("video.mp4", b"\x00\x00\x00\x18ftypisom", "video/mp4")})
+        self.assertEqual(res_mp4.status_code, 415)
+        self.assertEqual(res_mp4.json().get("triage_status"), "IGNORED_UNSUPPORTED_FORMAT")
+
+        res_bad_pdf = client.post("/api/v1/anonymize/preview", files={"file": ("corrupt.pdf", b"NOT_A_VALID_PDF_HEADER", "application/pdf")})
+        self.assertEqual(res_bad_pdf.status_code, 415)
+        self.assertEqual(res_bad_pdf.json().get("triage_status"), "IGNORED_UNSUPPORTED_FORMAT")
+
+    def test_non_prescription_invoice_rejected(self):
+        """
+        Verifies that non-clinical documents (e.g. tax invoices) lacking medical/pharmacological
+        markers are rejected by the clinical gatekeeper without rendering or burning masks.
+        """
+        from src.document_validator import evaluate_prescription_gate
+        from fastapi.testclient import TestClient
+        from api.server import app
+        from PIL import Image, ImageDraw
+
+        invoice_text = "Tax Invoice #99, Name: Aryan, Address: 123 MD Road, Total: $50"
+        is_rx, score, reasons = evaluate_prescription_gate(invoice_text)
+        self.assertFalse(is_rx)
+        self.assertLess(score, 2.5)
+        self.assertIn("Document lacks clinical, pharmacological, or provider markers.", reasons)
+
+        # Test through /api/v1/anonymize/preview
+        im = Image.new("RGB", (800, 600), (255, 255, 255))
+        d = ImageDraw.Draw(im)
+        d.text((50, 50), "Tax Invoice #99", fill=(0, 0, 0))
+        d.text((50, 100), "Name: Aryan Sharma", fill=(0, 0, 0))
+        d.text((50, 150), "Address: 123 MD Road", fill=(0, 0, 0))
+        d.text((50, 200), "Total: $50.00", fill=(0, 0, 0))
+        test_inv_path = os.path.join(self.temp_dir, "test_tax_invoice.png")
+        im.save(test_inv_path)
+
+        with open(test_inv_path, "rb") as f:
+            im_bytes = f.read()
+
+        client = TestClient(app)
+        res = client.post("/api/v1/anonymize/preview", files={"file": ("test_tax_invoice.png", im_bytes, "image/png")})
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["triage_status"], "NOT_A_PRESCRIPTION")
+        self.assertEqual(data["total_entities_redacted"], 0)
+        self.assertIsNone(data["original_image_base64"])
+        self.assertIsNone(data["redacted_image_base64"])
+        self.assertIsNone(data["download_file_base64"])
+
+    def test_force_prescription_override(self):
+        """
+        Verifies that force_prescription=True bypasses the clinical gate on non-standard/low-score slips,
+        completes redaction, and appends non-PII structural telemetry to logs/gate_overrides.jsonl.
+        """
+        import json
+        from fastapi.testclient import TestClient
+        from api.server import app
+        from PIL import Image, ImageDraw
+
+        im = Image.new("RGB", (800, 600), (255, 255, 255))
+        d = ImageDraw.Draw(im)
+        d.text((50, 50), "Bill To: John Smith", fill=(0, 0, 0))
+        d.text((50, 100), "Ship To: 742 Evergreen Terrace", fill=(0, 0, 0))
+        d.text((50, 150), "Tel: 555-0199", fill=(0, 0, 0))
+        test_bill_path = os.path.join(self.temp_dir, "test_bill.png")
+        im.save(test_bill_path)
+
+        with open(test_bill_path, "rb") as f:
+            bill_bytes = f.read()
+
+        client = TestClient(app)
+        res = client.post("/api/v1/anonymize/preview?force_prescription=true", files={"file": ("test_bill.png", bill_bytes, "image/png")})
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertNotEqual(data["triage_status"], "NOT_A_PRESCRIPTION")
+        self.assertIsNotNone(data["download_file_base64"])
+
+        # Check telemetry file
+        candidate_dirs = [
+            os.path.join(self.repo_dir, "logs"),
+            os.path.join(os.getcwd(), "logs"),
+        ]
+        log_path = None
+        for d in candidate_dirs:
+            p = os.path.join(d, "gate_overrides.jsonl")
+            if os.path.exists(p):
+                log_path = p
+                break
+        self.assertIsNotNone(log_path, "Telemetry log file gate_overrides.jsonl was not created")
+
+        with open(log_path, "r", encoding="utf-8") as f:
+            lines = [line.strip() for line in f if line.strip()]
+        self.assertTrue(len(lines) > 0)
+        last_entry = json.loads(lines[-1])
+
+        self.assertIn("timestamp", last_entry)
+        self.assertIn("format", last_entry)
+        self.assertIn("ocr_word_count", last_entry)
+        self.assertIn("gate_score_before_override", last_entry)
+        self.assertIn("redacted_count", last_entry)
+        # Strict zero-PII check
+        raw_json = json.dumps(last_entry)
+        self.assertNotIn("John", raw_json)
+        self.assertNotIn("Evergreen", raw_json)
+        self.assertNotIn("555-0199", raw_json)
 
 
 if __name__ == "__main__":

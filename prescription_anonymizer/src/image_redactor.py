@@ -1106,7 +1106,7 @@ class LocalImageRedactor:
             all_targets.extend(targets)
         return all_targets
 
-    def redact(self, input_path: str, output_path: Optional[str] = None, jurisdiction: str = "AUTO") -> Dict[str, Any]:
+    def redact(self, input_path: str, output_path: Optional[str] = None, jurisdiction: str = "AUTO", force_prescription: bool = False) -> Dict[str, Any]:
         """
         Executes complete, irreversible redaction on scanned raster PDF or image.
         Returns audit summary dictionary with detected jurisdiction.
@@ -1184,6 +1184,35 @@ class LocalImageRedactor:
             # Resolve jurisdiction using actual extracted OCR text
             ocr_text = getattr(self, "_last_extracted_text", "") or page.get_text()
             resolved_jur = JurisdictionDetector.resolve_jurisdiction(ocr_text, jurisdiction)
+
+            from .document_validator import evaluate_prescription_gate, record_gate_override_telemetry
+            visual_stamps_count = sum(1 for t in targets if t.category == "STAMP" or "STAMP" in t.raw_text or t.engine == "visual_grounder_stamp")
+            barcode_count = sum(1 for t in targets if t.category in ("BARCODE", "BARCODE_OR_QR", "QR_CODE"))
+            is_rx, gate_score, gate_reasons = evaluate_prescription_gate(
+                ocr_text,
+                visual_stamps_count=visual_stamps_count,
+                barcode_count=barcode_count
+            )
+
+            if not force_prescription and not is_rx:
+                doc.close()
+                if is_low_mem:
+                    self._last_extracted_words = []
+                    self._last_whitelisted_rects = []
+                    self._last_extracted_text = ""
+                return {
+                    "input_file": input_path,
+                    "output_file": output_path,
+                    "jurisdiction": resolved_jur,
+                    "format_type": "SCANNED_RASTER_IMAGE",
+                    "total_entities_redacted": 0,
+                    "extracted_text": ocr_text,
+                    "redacted_targets": [],
+                    "confidence_score": 0.0,
+                    "triage_status": "NOT_A_PRESCRIPTION",
+                    "gate_score": gate_score,
+                    "review_reasons": ["Not recognized as a medical prescription. Click 'Force Anonymize' if this is a handwritten or non-standard slip."]
+                }
 
             whitelisted_rects = getattr(self, "_last_whitelisted_rects", [])
             for t in targets:
@@ -1299,6 +1328,14 @@ class LocalImageRedactor:
             except Exception:
                 pass
 
+            if force_prescription:
+                record_gate_override_telemetry(
+                    format_type="SCANNED_RASTER_IMAGE",
+                    ocr_word_count=len(final_extracted_text.split()),
+                    gate_score=gate_score if 'gate_score' in locals() else 0.0,
+                    redacted_count=len(reported_targets)
+                )
+
             return {
                 "input_file": input_path,
                 "output_file": output_path,
@@ -1330,6 +1367,36 @@ class LocalImageRedactor:
             all_targets.extend(targets)
             if hasattr(self, "_last_extracted_text") and self._last_extracted_text:
                 collected_ocr_text.append(self._last_extracted_text)
+
+            if p_idx == 0:
+                first_page_text = self._last_extracted_text if (hasattr(self, "_last_extracted_text") and self._last_extracted_text) else page.get_text()
+                from .document_validator import evaluate_prescription_gate, record_gate_override_telemetry
+                visual_stamps_count = sum(1 for t in targets if t.category == "STAMP" or "STAMP" in t.raw_text or t.engine == "visual_grounder_stamp")
+                barcode_count = sum(1 for t in targets if t.category in ("BARCODE", "BARCODE_OR_QR", "QR_CODE"))
+                is_rx, gate_score, gate_reasons = evaluate_prescription_gate(
+                    first_page_text,
+                    visual_stamps_count=visual_stamps_count,
+                    barcode_count=barcode_count
+                )
+                if not force_prescription and not is_rx:
+                    doc.close()
+                    if is_low_mem:
+                        self._last_extracted_words = []
+                        self._last_whitelisted_rects = []
+                        self._last_extracted_text = ""
+                    return {
+                        "input_file": input_path,
+                        "output_file": output_path,
+                        "jurisdiction": jurisdiction,
+                        "format_type": "SCANNED_RASTER",
+                        "total_entities_redacted": 0,
+                        "extracted_text": first_page_text,
+                        "redacted_targets": [],
+                        "confidence_score": 0.0,
+                        "triage_status": "NOT_A_PRESCRIPTION",
+                        "gate_score": gate_score,
+                        "review_reasons": ["Not recognized as a medical prescription. Click 'Force Anonymize' if this is a handwritten or non-standard slip."]
+                    }
 
             whitelisted_rects = getattr(self, "_last_whitelisted_rects", [])
             for t in targets:
@@ -1429,6 +1496,15 @@ class LocalImageRedactor:
             ctypes.CDLL("libc.so.6").malloc_trim(0)
         except Exception:
             pass
+
+        if force_prescription:
+            from .document_validator import record_gate_override_telemetry
+            record_gate_override_telemetry(
+                format_type="SCANNED_RASTER_PDF",
+                ocr_word_count=sum(len(txt.split()) for txt in collected_ocr_text),
+                gate_score=gate_score if 'gate_score' in locals() else 0.0,
+                redacted_count=len(all_targets)
+            )
 
         return {
             "input_file": input_path,

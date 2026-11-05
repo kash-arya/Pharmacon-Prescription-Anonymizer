@@ -129,4 +129,4 @@ python -m unittest tests/test_prescription_anonymizer.py
 ---
 
 ## Technical Defense & Architecture
-For architectural proofs, threat models, and oral defense talking points, see [`docs/PRESCRIPTION_ANONYMIZER_RESEARCH_DEFENSE.md`](docs/PRESCRIPTION_ANONYMIZER_RESEARCH_DEFENSE.md).
+For architectural proofs, threat models, and viva defense talking points, see [`docs/study_guide.md`](docs/study_guide.md).

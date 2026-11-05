@@ -40,11 +40,13 @@ try:
     from prescription_anonymizer.src.raster_checker import inspect_pdf_structure
     from prescription_anonymizer.src.vector_redactor import VectorPDFRedactor
     from prescription_anonymizer.src.image_redactor import LocalImageRedactor, resolve_tessdata_path
+    from prescription_anonymizer.src.document_validator import validate_file_signature
     from prescription_anonymizer.api.web_app import get_web_app_html
 except ImportError:
     from src.raster_checker import inspect_pdf_structure
     from src.vector_redactor import VectorPDFRedactor
     from src.image_redactor import LocalImageRedactor, resolve_tessdata_path
+    from src.document_validator import validate_file_signature
     from api.web_app import get_web_app_html
 
 SUPPORTED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".webp"}
@@ -105,13 +107,15 @@ class PreviewResponse(BaseModel):
     engine: str = Field(..., description="De-identification pipeline utilized")
     total_entities_redacted: int = Field(..., description="Total count of masked entities", examples=[14])
     confidence_score: Optional[float] = Field(1.0, description="Self-audit confidence score (0.0 to 0.99)")
-    triage_status: Optional[str] = Field("AUTO_APPROVED", description="Triage verdict: AUTO_APPROVED or NEEDS_HUMAN_REVIEW")
+    triage_status: Optional[str] = Field("AUTO_APPROVED", description="Triage verdict: AUTO_APPROVED, NEEDS_HUMAN_REVIEW, or NOT_A_PRESCRIPTION")
     review_reasons: Optional[List[str]] = Field(default_factory=list, description="Triage review reasons")
-    original_image_base64: str = Field(..., description="High-resolution PNG Base64 Data URI of original page for left pane")
-    redacted_image_base64: str = Field(..., description="High-resolution PNG Base64 Data URI of redacted page for right pane")
-    side_by_side_image_base64: str = Field(..., description="Combined side-by-side comparison JPEG Base64 Data URI")
-    download_file_base64: str = Field(..., description="Complete anonymized file payload Base64 Data URI in original format")
+    original_image_base64: Optional[str] = Field(None, description="High-resolution PNG Base64 Data URI of original page for left pane")
+    redacted_image_base64: Optional[str] = Field(None, description="High-resolution PNG Base64 Data URI of redacted page for right pane")
+    side_by_side_image_base64: Optional[str] = Field(None, description="Combined side-by-side comparison JPEG Base64 Data URI")
+    download_file_base64: Optional[str] = Field(None, description="Complete anonymized file payload Base64 Data URI in original format")
     redacted_targets: List[Dict[str, Any]] = Field(default_factory=list, description="List of all redacted entity descriptors")
+    gate_score: Optional[float] = Field(None, description="Clinical gatekeeper confidence score")
+    redacted_count: Optional[int] = Field(None, description="Alias for total_entities_redacted")
     # Legacy backward-compatibility aliases
     original_image: Optional[str] = Field(None, description="Legacy alias for original_image_base64")
     redacted_image: Optional[str] = Field(None, description="Legacy alias for redacted_image_base64")
@@ -223,12 +227,12 @@ def _purge_system_memory():
             _image_engine._last_extracted_text = ""
 
 
-def _run_redaction(fmt: str, input_path: str, output_path: str, jurisdiction: str) -> tuple[str, Dict[str, Any]]:
+def _run_redaction(fmt: str, input_path: str, output_path: str, jurisdiction: str, force_prescription: bool = False) -> tuple[str, Dict[str, Any]]:
     """Executes redaction pipeline directly in-process (single process)."""
     if fmt == "VECTOR_DIGITAL":
-        return "Native Vector Stream Redactor (PyMuPDF)", get_vector_redactor().redact(input_path, output_path, jurisdiction=jurisdiction)
+        return "Native Vector Stream Redactor (PyMuPDF)", get_vector_redactor().redact(input_path, output_path, jurisdiction=jurisdiction, force_prescription=force_prescription)
     else:
-        return "Scanned Raster Image Redactor (Local OCR Anchor Engine)", get_redactor().redact(input_path, output_path, jurisdiction=jurisdiction)
+        return "Scanned Raster Image Redactor (Local OCR Anchor Engine)", get_redactor().redact(input_path, output_path, jurisdiction=jurisdiction, force_prescription=force_prescription)
 
 
 def _render_page_to_pil(file_path: str, page_num: int = 0, dpi: int = 150, max_height: Optional[int] = None) -> Image.Image:
@@ -432,6 +436,10 @@ async def anonymize_prescription(
     jurisdiction: Literal["AUTO", "US", "UK", "AU", "EU", "IN", "GLOBAL"] = Query(
         "AUTO",
         description="Target healthcare regulatory framework (AUTO detects automatically)"
+    ),
+    force_prescription: bool = Query(
+        False,
+        description="Bypass clinical document gate with zero-PII telemetry"
     )
 ):
     """
@@ -443,12 +451,6 @@ async def anonymize_prescription(
     filename = file.filename or "prescription.pdf"
     _, ext = os.path.splitext(filename)
     ext_lower = ext.lower()
-
-    if ext_lower not in SUPPORTED_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file format '{ext_lower}'. Supported extensions: {sorted(list(SUPPORTED_EXTENSIONS))}"
-        )
 
     # Write upload to isolated temporary file
     req_id = uuid.uuid4().hex
@@ -463,13 +465,24 @@ async def anonymize_prescription(
         content = await file.read()
         if not content:
             raise HTTPException(status_code=400, detail="Uploaded file is empty (0 bytes).")
+
+        is_valid_sig, _ = validate_file_signature(filename, content[:16])
+        if not is_valid_sig:
+            return JSONResponse(
+                status_code=415,
+                content={
+                    "triage_status": "IGNORED_UNSUPPORTED_FORMAT",
+                    "reason": "Unsupported file type or binary signature."
+                }
+            )
+
         with open(input_path, "wb") as f:
             f.write(content)
 
         structure = inspect_pdf_structure(input_path)
         fmt = structure["format_type"]
 
-        engine_name, report = _run_redaction(fmt, input_path, output_path, jurisdiction)
+        engine_name, report = _run_redaction(fmt, input_path, output_path, jurisdiction, force_prescription=force_prescription)
 
         redacted_count = report.get("total_entities_redacted", len(report.get("redacted_targets", [])))
         active_jurisdiction = report.get("jurisdiction", "GLOBAL")
@@ -477,6 +490,31 @@ async def anonymize_prescription(
         triage_stat = str(report.get("triage_status", "AUTO_APPROVED"))
         reasons = report.get("review_reasons", [])
         media_type = MIME_MAP.get(ext_lower, "application/octet-stream")
+
+        if triage_stat == "NOT_A_PRESCRIPTION":
+            if return_type == "file":
+                return JSONResponse(
+                    status_code=422,
+                    content={
+                        "detail": "Document was not recognized as a medical prescription.",
+                        "triage_status": "NOT_A_PRESCRIPTION",
+                        "gate_score": report.get("gate_score", 0.0)
+                    }
+                )
+            return JSONResponse(content={
+                "status": "NOT_A_PRESCRIPTION",
+                "filename": output_filename,
+                "format_type": fmt,
+                "jurisdiction": active_jurisdiction,
+                "engine": engine_name,
+                "total_entities_redacted": 0,
+                "redacted_targets": [],
+                "data_uri": "",
+                "gate_score": report.get("gate_score", 0.0),
+                "confidence_score": 0.0,
+                "triage_status": "NOT_A_PRESCRIPTION",
+                "review_reasons": ["Not recognized as a medical prescription. Click 'Force Anonymize' if this is a handwritten or non-standard slip."]
+            })
 
         if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
             raise HTTPException(status_code=500, detail="Sanitized file output was not generated or is empty.")
@@ -533,6 +571,10 @@ async def anonymize_prescription_file_download(
     jurisdiction: Literal["AUTO", "US", "UK", "AU", "EU", "IN", "GLOBAL"] = Query(
         "AUTO",
         description="Target healthcare regulatory framework (AUTO detects automatically)"
+    ),
+    force_prescription: bool = Query(
+        False,
+        description="Bypass clinical document gate with zero-PII telemetry"
     )
 ):
     """
@@ -542,12 +584,6 @@ async def anonymize_prescription_file_download(
     filename = file.filename or "prescription.pdf"
     stem, ext = os.path.splitext(filename)
     ext_lower = ext.lower()
-
-    if ext_lower not in SUPPORTED_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file format '{ext_lower}'. Supported extensions: {sorted(list(SUPPORTED_EXTENSIONS))}"
-        )
 
     req_id = uuid.uuid4().hex
     temp_dir = f"/tmp/pharmacon_file_{req_id}"
@@ -561,19 +597,40 @@ async def anonymize_prescription_file_download(
         content = await file.read()
         if not content:
             raise HTTPException(status_code=400, detail="Uploaded file is empty (0 bytes).")
+
+        is_valid_sig, _ = validate_file_signature(filename, content[:16])
+        if not is_valid_sig:
+            return JSONResponse(
+                status_code=415,
+                content={
+                    "triage_status": "IGNORED_UNSUPPORTED_FORMAT",
+                    "reason": "Unsupported file type or binary signature."
+                }
+            )
+
         with open(input_path, "wb") as f:
             f.write(content)
 
         structure = inspect_pdf_structure(input_path)
         fmt = structure["format_type"]
 
-        engine_name, report = _run_redaction(fmt, input_path, output_path, jurisdiction)
+        engine_name, report = _run_redaction(fmt, input_path, output_path, jurisdiction, force_prescription=force_prescription)
 
         redacted_count = report.get("total_entities_redacted", len(report.get("redacted_targets", [])))
         active_jurisdiction = report.get("jurisdiction", "GLOBAL")
         conf_score = float(report.get("confidence_score", 0.96))
         triage_stat = str(report.get("triage_status", "AUTO_APPROVED"))
         media_type = MIME_MAP.get(ext_lower, "application/octet-stream")
+
+        if triage_stat == "NOT_A_PRESCRIPTION":
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "detail": "Document was not recognized as a medical prescription.",
+                    "triage_status": "NOT_A_PRESCRIPTION",
+                    "gate_score": report.get("gate_score", 0.0)
+                }
+            )
 
         if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
             raise HTTPException(status_code=500, detail="Sanitized file output was not generated or is empty.")
@@ -608,6 +665,10 @@ async def anonymize_prescription_preview(
     jurisdiction: Literal["AUTO", "US", "UK", "AU", "EU", "IN", "GLOBAL"] = Query(
         "AUTO",
         description="Target healthcare regulatory framework (AUTO detects automatically)"
+    ),
+    force_prescription: bool = Query(
+        False,
+        description="Bypass clinical document gate with zero-PII telemetry"
     )
 ):
     """
@@ -623,12 +684,6 @@ async def anonymize_prescription_preview(
     stem, ext = os.path.splitext(filename)
     ext_lower = ext.lower()
 
-    if ext_lower not in SUPPORTED_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file format '{ext_lower}'. Supported extensions: {sorted(list(SUPPORTED_EXTENSIONS))}"
-        )
-
     req_id = uuid.uuid4().hex
     temp_dir = f"/tmp/pharmacon_preview_{req_id}"
     os.makedirs(temp_dir, exist_ok=True)
@@ -641,13 +696,24 @@ async def anonymize_prescription_preview(
         content = await file.read()
         if not content:
             raise HTTPException(status_code=400, detail="Uploaded file is empty (0 bytes).")
+
+        is_valid_sig, _ = validate_file_signature(filename, content[:16])
+        if not is_valid_sig:
+            return JSONResponse(
+                status_code=415,
+                content={
+                    "triage_status": "IGNORED_UNSUPPORTED_FORMAT",
+                    "reason": "Unsupported file type or binary signature."
+                }
+            )
+
         with open(input_path, "wb") as f:
             f.write(content)
 
         structure = inspect_pdf_structure(input_path)
         fmt = structure["format_type"]
 
-        engine_name, report = _run_redaction(fmt, input_path, output_path, jurisdiction)
+        engine_name, report = _run_redaction(fmt, input_path, output_path, jurisdiction, force_prescription=force_prescription)
 
         redacted_count = report.get("total_entities_redacted", len(report.get("redacted_targets", [])))
         active_jurisdiction = report.get("jurisdiction", "GLOBAL")
@@ -655,6 +721,34 @@ async def anonymize_prescription_preview(
         triage_stat = str(report.get("triage_status", "AUTO_APPROVED"))
         reasons = report.get("review_reasons", [])
         mime_type = MIME_MAP.get(ext_lower, "application/octet-stream")
+
+        if triage_stat == "NOT_A_PRESCRIPTION":
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": "NOT_A_PRESCRIPTION",
+                    "filename": filename,
+                    "anonymized_filename": output_filename,
+                    "mime_type": mime_type,
+                    "format_type": fmt,
+                    "jurisdiction": active_jurisdiction,
+                    "engine": engine_name,
+                    "total_entities_redacted": 0,
+                    "redacted_count": 0,
+                    "confidence_score": 0.0,
+                    "gate_score": report.get("gate_score", 0.0),
+                    "triage_status": "NOT_A_PRESCRIPTION",
+                    "review_reasons": ["Not recognized as a medical prescription. Click 'Force Anonymize' if this is a handwritten or non-standard slip."],
+                    "original_image_base64": None,
+                    "redacted_image_base64": None,
+                    "side_by_side_image_base64": None,
+                    "download_file_base64": None,
+                    "redacted_targets": [],
+                    "original_image": None,
+                    "redacted_image": None,
+                    "data_uri": None
+                }
+            )
 
         is_low_mem = os.environ.get("RENDER_LOW_MEMORY") == "1"
         preview_dpi = 80 if is_low_mem else 150

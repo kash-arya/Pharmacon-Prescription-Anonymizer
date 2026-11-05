@@ -451,7 +451,7 @@ class VectorPDFRedactor:
         self._last_whitelisted_rects = all_whitelisted_rects
         return targets
 
-    def redact(self, input_pdf_path: str, output_pdf_path: str, jurisdiction: str = "AUTO") -> Dict[str, Any]:
+    def redact(self, input_pdf_path: str, output_pdf_path: str, jurisdiction: str = "AUTO", force_prescription: bool = False) -> Dict[str, Any]:
         """
         Executes complete text-deletion and visual masking on the PDF.
         Returns audit summary with redacted entities and detected jurisdiction.
@@ -459,6 +459,25 @@ class VectorPDFRedactor:
         doc = pymupdf.open(input_pdf_path)
         full_doc_text = " ".join(page.get_text() for page in doc)
         resolved_jur = JurisdictionDetector.resolve_jurisdiction(full_doc_text, jurisdiction)
+
+        from .document_validator import evaluate_prescription_gate, record_gate_override_telemetry
+        is_rx, gate_score, gate_reasons = evaluate_prescription_gate(full_doc_text)
+        if not force_prescription and not is_rx:
+            doc.close()
+            return {
+                "input_file": input_pdf_path,
+                "output_file": output_pdf_path,
+                "jurisdiction": resolved_jur,
+                "format_type": "VECTOR_DIGITAL",
+                "total_entities_redacted": 0,
+                "total_redactions_applied": 0,
+                "extracted_text": full_doc_text,
+                "redacted_targets": [],
+                "confidence_score": 0.0,
+                "triage_status": "NOT_A_PRESCRIPTION",
+                "gate_score": gate_score,
+                "review_reasons": ["Not recognized as a medical prescription. Click 'Force Anonymize' if this is a handwritten or non-standard slip."]
+            }
 
         targets = self.find_pii_targets(doc)
         whitelisted_rects = getattr(self, "_last_whitelisted_rects", [])
@@ -519,6 +538,14 @@ class VectorPDFRedactor:
             extracted_text=full_doc_text,
             is_raster=False
         )
+
+        if force_prescription:
+            record_gate_override_telemetry(
+                format_type="VECTOR_DIGITAL",
+                ocr_word_count=len(full_doc_text.split()),
+                gate_score=gate_score,
+                redacted_count=len(targets)
+            )
 
         return {
             "input_file": input_pdf_path,
