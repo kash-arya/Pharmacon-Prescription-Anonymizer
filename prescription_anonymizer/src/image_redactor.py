@@ -1258,8 +1258,13 @@ class LocalImageRedactor:
 
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             if out_ext_lower in self.IMAGE_EXTENSIONS:
-                scale_x = orig_w / page.rect.width
-                scale_y = orig_h / page.rect.height
+                if is_low_mem and max(orig_w, orig_h) > 1800:
+                    scale = 1800.0 / max(orig_w, orig_h)
+                    scale_x = (orig_w * scale) / page.rect.width
+                    scale_y = (orig_h * scale) / page.rect.height
+                else:
+                    scale_x = orig_w / page.rect.width
+                    scale_y = orig_h / page.rect.height
                 pix = page.get_pixmap(matrix=pymupdf.Matrix(scale_x, scale_y))
                 pix.save(output_path)
                 del pix

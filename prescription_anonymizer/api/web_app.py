@@ -465,6 +465,52 @@ def get_web_app_html() -> str:
       }
     }
 
+    // Client-Side Image Pre-Scaling: Scales oversized camera photos (>1800px) on browser GPU to protect 0.1 vCPU server RAM
+    function scaleImageFileIfNeeded(file) {
+      return new Promise((resolve) => {
+        if (!file) return resolve(file);
+        const name = file.name || '';
+        const ext = name.split('.').pop().toLowerCase();
+        if (!['jpg', 'jpeg', 'png', 'webp'].includes(ext)) {
+          return resolve(file);
+        }
+
+        const img = new Image();
+        const objectUrl = URL.createObjectURL(file);
+        img.onload = () => {
+          URL.revokeObjectURL(objectUrl);
+          const w = img.naturalWidth || img.width;
+          const h = img.naturalHeight || img.height;
+          if (Math.max(w, h) <= 1800) {
+            return resolve(file);
+          }
+
+          const scale = 1800.0 / Math.max(w, h);
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(w * scale));
+          canvas.height = Math.max(1, Math.round(h * scale));
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+          canvas.toBlob((blob) => {
+            if (!blob) {
+              return resolve(file);
+            }
+            const scaledFile = new File([blob], file.name, {
+              type: 'image/jpeg',
+              lastModified: file.lastModified || Date.now()
+            });
+            resolve(scaledFile);
+          }, 'image/jpeg', 0.92);
+        };
+        img.onerror = () => {
+          URL.revokeObjectURL(objectUrl);
+          resolve(file);
+        };
+        img.src = objectUrl;
+      });
+    }
+
     // Client-Side Pre-Filter: Extension Whitelist & 25MB Cap
     const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB
     const ALLOWED_EXTS = new Set(['pdf', 'png', 'jpg', 'jpeg']);
@@ -761,28 +807,54 @@ def get_web_app_html() -> str:
         if (item.status !== 'queued') continue;
 
         item.status = 'processing';
+        item.statusMessage = null;
         renderQueueGallery();
         updateQueueProgress();
 
-        abortController = new AbortController();
+        let res = null;
+        let rawText = '';
+        let data = null;
+        let retryCount = 0;
+        const max503Retries = 2;
 
         try {
-          const formData = new FormData();
-          formData.append('file', item.file);
+          while (retryCount <= max503Retries) {
+            if (!isQueueRunning) break;
+            abortController = new AbortController();
 
-          const res = await fetch(`/api/v1/anonymize/preview?page=0&jurisdiction=${encodeURIComponent(jur)}`, {
-            method: 'POST',
-            body: formData,
-            signal: abortController.signal
-          });
+            // Client-side raster pre-scaling for huge camera photos (>1800px)
+            const uploadFile = await scaleImageFileIfNeeded(item.file);
+            const formData = new FormData();
+            formData.append('file', uploadFile);
 
-          const rawText = await res.text();
-          let data = null;
-          try {
-            data = JSON.parse(rawText);
-          } catch (_) {
-            data = null;
+            res = await fetch(`/api/v1/anonymize/preview?page=0&jurisdiction=${encodeURIComponent(jur)}`, {
+              method: 'POST',
+              body: formData,
+              signal: abortController.signal
+            });
+
+            if (res.status === 503 && retryCount < max503Retries) {
+              retryCount++;
+              item.status = 'processing';
+              item.statusMessage = `Server busy — queued retry (${retryCount}/${max503Retries})...`;
+              renderQueueGallery();
+              updateQueueProgress();
+              await new Promise((resolve) => setTimeout(resolve, 4000));
+              continue;
+            }
+
+            rawText = await res.text();
+            try {
+              data = JSON.parse(rawText);
+            } catch (_) {
+              data = null;
+            }
+            break;
           }
+
+          if (!isQueueRunning) break;
+
+          item.statusMessage = null;
 
           if (res.status === 422 || (data && data.triage_status === 'NOT_A_PRESCRIPTION')) {
             item.status = 'not_a_prescription';
@@ -877,8 +949,9 @@ def get_web_app_html() -> str:
 
       const jurSelect = document.getElementById('jurisdiction-select');
       const jur = jurSelect ? jurSelect.value : 'AUTO';
+      const uploadFile = await scaleImageFileIfNeeded(item.file);
       const formData = new FormData();
-      formData.append('file', item.file);
+      formData.append('file', uploadFile);
 
       try {
         const res = await fetch(`/api/v1/anonymize/preview?page=0&jurisdiction=${encodeURIComponent(jur)}&force_prescription=true`, {
@@ -998,7 +1071,12 @@ def get_web_app_html() -> str:
       queuePct.innerText = pct + '%';
 
       if (isQueueRunning && activeIndex > 0) {
-        queueStatusText.innerText = `Processing ${activeIndex} of ${total}: ${activeItemName} [${pct}%]`;
+        const activeItem = fileQueue[activeIndex - 1];
+        if (activeItem && activeItem.statusMessage) {
+          queueStatusText.innerText = `${activeItem.statusMessage} [${pct}%]`;
+        } else {
+          queueStatusText.innerText = `Processing ${activeIndex} of ${total}: ${activeItemName} [${pct}%]`;
+        }
       } else if (isQueueRunning) {
         queueStatusText.innerText = `Processing ${processed} of ${total} [${pct}%]...`;
       } else if (processed === total) {
@@ -1065,11 +1143,14 @@ def get_web_app_html() -> str:
               </div>`;
           }
         } else if (item.status === 'processing') {
-          badgeHtml = `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-sky-500/20 text-sky-400 border border-sky-500/30">● Processing</span>`;
+          const isBusyRetry = item.statusMessage && item.statusMessage.includes('busy');
+          badgeHtml = isBusyRetry
+            ? `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">⏱ Server Busy</span>`
+            : `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-sky-500/20 text-sky-400 border border-sky-500/30">● Processing</span>`;
           previewHtml = `
-            <div class="w-full h-24 rounded bg-slate-950 flex flex-col items-center justify-center gap-1">
-              <div class="w-5 h-5 border-2 border-sky-400 border-t-transparent rounded-full animate-spin"></div>
-              <span class="text-[10px] font-mono text-slate-400">Sanitizing...</span>
+            <div class="w-full h-24 rounded bg-slate-950 flex flex-col items-center justify-center gap-1 p-1 text-center">
+              <div class="w-5 h-5 border-2 ${isBusyRetry ? 'border-amber-400' : 'border-sky-400'} border-t-transparent rounded-full animate-spin"></div>
+              <span class="text-[10px] font-mono ${isBusyRetry ? 'text-amber-300' : 'text-slate-400'}">${escapeHtml(item.statusMessage || 'Sanitizing...')}</span>
             </div>`;
         } else if (item.status === 'failed') {
           badgeHtml = `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-500/20 text-red-400 border border-red-500/30">✕ Failed</span>`;
@@ -1229,8 +1310,9 @@ def get_web_app_html() -> str:
 
       const jurSelect = document.getElementById('jurisdiction-select');
       const jur = jurSelect ? jurSelect.value : 'AUTO';
+      const uploadFile = await scaleImageFileIfNeeded(item.file);
       const formData = new FormData();
-      formData.append('file', item.file);
+      formData.append('file', uploadFile);
 
       try {
         const res = await fetch(`/api/v1/anonymize/preview?page=${targetPage}&jurisdiction=${encodeURIComponent(jur)}`, {
@@ -1431,11 +1513,12 @@ def get_web_app_html() -> str:
 """
 
 
-# Clean direct application export ensuring `from api.web_app import app` works reliably without dynamic __getattr__
+# Clean direct application export ensuring `from api.web_app import app, PIPELINE_SEMAPHORE` works reliably
 try:
-    from api.server import app
+    from api.server import app, PIPELINE_SEMAPHORE
 except ImportError:
     try:
-        from prescription_anonymizer.api.server import app
+        from prescription_anonymizer.api.server import app, PIPELINE_SEMAPHORE
     except ImportError:
         app = None
+        PIPELINE_SEMAPHORE = None

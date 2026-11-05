@@ -786,6 +786,73 @@ class TestPrescriptionAnonymizer(unittest.TestCase):
         self.assertIsNotNone(data_tt_force.get("redacted_image_base64"))
         self.assertIsNotNone(data_tt_force.get("download_file_base64"))
 
+    def test_concurrent_semaphore_serialization_and_503(self):
+        """
+        Verifies that PIPELINE_SEMAPHORE serializes concurrent requests cleanly,
+        returns HTTP 503 with Retry-After: 5 on timeout, and releases the lock
+        on both success and exception paths.
+        """
+        from api.server import app, PIPELINE_SEMAPHORE
+        from api.web_app import PIPELINE_SEMAPHORE as WEB_APP_SEMAPHORE
+        from fastapi.testclient import TestClient
+
+        self.assertIsNotNone(PIPELINE_SEMAPHORE)
+        self.assertIs(PIPELINE_SEMAPHORE, WEB_APP_SEMAPHORE)
+
+        client = TestClient(app, raise_server_exceptions=False)
+        real_rx_path = os.path.join(self.repo_dir, "data", "samples", "extracted_images", "sample_prescription_1_p1.png")
+        if not os.path.exists(real_rx_path):
+            real_rx_path = os.path.join(self.repo_dir, "data", "raw_public_slips", "prescription_00006.png")
+        with open(real_rx_path, "rb") as f:
+            valid_bytes = f.read()
+
+        old_timeout = os.environ.get("PIPELINE_SEMAPHORE_TIMEOUT")
+        os.environ["PIPELINE_SEMAPHORE_TIMEOUT"] = "0.05"
+
+        try:
+            # 1. Simulate semaphore acquisition (lock held by another worker)
+            PIPELINE_SEMAPHORE._value = 0
+            self.assertTrue(PIPELINE_SEMAPHORE.locked())
+
+            res_busy = client.post(
+                "/api/v1/anonymize/preview",
+                files={"file": ("sample.png", valid_bytes, "image/png")}
+            )
+            self.assertEqual(res_busy.status_code, 503)
+            self.assertEqual(res_busy.headers.get("retry-after"), "5")
+            busy_data = res_busy.json()
+            self.assertIn("Server busy processing another document", busy_data.get("detail", ""))
+
+            # Reset semaphore lock
+            PIPELINE_SEMAPHORE._value = 1
+            self.assertFalse(PIPELINE_SEMAPHORE.locked())
+
+            # 2. Verify lock release on Success path
+            os.environ["PIPELINE_SEMAPHORE_TIMEOUT"] = "15.0"
+            res_ok = client.post(
+                "/api/v1/anonymize/preview",
+                files={"file": ("sample.png", valid_bytes, "image/png")}
+            )
+            self.assertEqual(res_ok.status_code, 200)
+            self.assertFalse(PIPELINE_SEMAPHORE.locked(), "Semaphore must be unlocked after success path")
+
+            # 3. Verify lock release on Exception path
+            corrupt_png = b"\x89PNG\r\n\x1a\nCORRUPT_PAYLOAD_TRIGGERING_EXCEPTION"
+            res_err = client.post(
+                "/api/v1/anonymize/preview",
+                files={"file": ("corrupt.png", corrupt_png, "image/png")}
+            )
+            self.assertEqual(res_err.status_code, 500)
+            self.assertFalse(PIPELINE_SEMAPHORE.locked(), "Semaphore must be unlocked after exception path")
+
+        finally:
+            if old_timeout is not None:
+                os.environ["PIPELINE_SEMAPHORE_TIMEOUT"] = old_timeout
+            else:
+                os.environ.pop("PIPELINE_SEMAPHORE_TIMEOUT", None)
+            if PIPELINE_SEMAPHORE.locked():
+                PIPELINE_SEMAPHORE._value = 1
+
 
 if __name__ == "__main__":
     unittest.main()

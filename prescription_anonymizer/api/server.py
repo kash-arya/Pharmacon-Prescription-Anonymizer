@@ -22,6 +22,7 @@ import json
 import io
 import gc
 import ctypes
+import asyncio
 from typing import Any, Dict, List, Optional, Set, Tuple, Union, Literal
 from pydantic import BaseModel, Field
 from PIL import Image, ImageDraw, ImageFont
@@ -171,6 +172,14 @@ app.add_middleware(
     ]
 )
 
+# Non-blocking single-concurrency pipeline semaphore to eliminate multi-user OOM crashes
+PIPELINE_SEMAPHORE = asyncio.Semaphore(1)
+
+
+def _get_semaphore_timeout() -> float:
+    return float(os.environ.get("PIPELINE_SEMAPHORE_TIMEOUT", "75.0"))
+
+
 # Shared redactor singletons (lazily initialized on first processing request)
 _vector_engine: Optional[VectorPDFRedactor] = None
 _image_engine: Optional[LocalImageRedactor] = None
@@ -270,7 +279,9 @@ def _render_page_to_pil(file_path: str, page_num: int = 0, dpi: int = 150, max_h
         try:
             with Image.open(file_path) as im:
                 if is_low_mem and max(im.size) > 700:
-                    im.draft("RGB", (max_height or 700, max_height or 700))
+                    target_dim = max_height or 700
+                    im.draft("RGB", (target_dim, target_dim))
+                    im.thumbnail((target_dim, target_dim), Image.Resampling.BILINEAR)
                 img = im.convert("RGB")
         except Exception:
             doc = pymupdf.open(file_path)
@@ -385,6 +396,126 @@ def _render_page_to_base64_jpeg(file_path: str, page_num: int = 0, dpi: int = 12
     return _pil_to_base64_data_uri(img, format="JPEG", quality=85)
 
 
+def _build_preview_payload(
+    input_path: str,
+    output_path: str,
+    page: int,
+    triage_stat: str,
+    conf_score: float,
+    ext_lower: str,
+    mime_type: str
+) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
+    """Generates preview images and download payload synchronously in a worker thread."""
+    is_low_mem = os.environ.get("RENDER_LOW_MEMORY") == "1"
+    preview_dpi = 80 if is_low_mem else 150
+    preview_max_h = 700 if is_low_mem else None
+    preview_fmt = "JPEG" if is_low_mem else "PNG"
+    preview_quality = 72 if is_low_mem else 85
+
+    orig_pil = _render_page_to_pil(input_path, page_num=page, dpi=preview_dpi, max_height=preview_max_h)
+    red_pil = _render_page_to_pil(output_path, page_num=page, dpi=preview_dpi, max_height=preview_max_h)
+
+    side_by_side_b64 = _generate_side_by_side_base64(
+        orig_pil, red_pil,
+        triage_status=triage_stat,
+        confidence=conf_score
+    )
+    orig_preview_b64 = _pil_to_base64_data_uri(orig_pil, format=preview_fmt, quality=preview_quality)
+    red_preview_b64 = _pil_to_base64_data_uri(red_pil, format=preview_fmt, quality=preview_quality)
+    del orig_pil, red_pil
+
+    try:
+        pymupdf.TOOLS.store_shrink(100)
+    except Exception:
+        pass
+    gc.collect()
+    try:
+        import ctypes
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
+
+    if is_low_mem and ext_lower in {".jpg", ".jpeg", ".png", ".webp"}:
+        download_b64 = red_preview_b64
+    else:
+        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+            raise RuntimeError(f"Redacted output file is missing or empty at {output_path}")
+        with open(output_path, "rb") as out_f:
+            file_bytes = out_f.read()
+        file_b64_str = base64.b64encode(file_bytes).decode("utf-8")
+        del file_bytes
+        download_b64 = f"data:{mime_type};base64,{file_b64_str}"
+        del file_b64_str
+
+    try:
+        pymupdf.TOOLS.store_shrink(100)
+    except Exception:
+        pass
+    gc.collect()
+    try:
+        import ctypes
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
+
+    return orig_preview_b64, red_preview_b64, side_by_side_b64, download_b64
+
+
+def _process_batch_sync(
+    in_extract_dir: str,
+    out_redact_dir: str,
+    found_files: List[Tuple[str, str, str, str]],
+    jurisdiction: str
+) -> Tuple[List[Dict[str, Any]], int]:
+    """Processes batch archive documents synchronously in a worker thread."""
+    name_counts: Dict[str, int] = {}
+    for full_p, rel_p, fname, ext in found_files:
+        base_cand = f"{os.path.splitext(fname)[0]}_anonymized{ext}"
+        name_counts[base_cand] = name_counts.get(base_cand, 0) + 1
+
+    batch_reports = []
+    total_redactions = 0
+
+    for full_p, rel_p, fname, ext in found_files:
+        name_no_ext = os.path.splitext(fname)[0]
+        flat_name = f"{name_no_ext}_anonymized{ext}"
+
+        if name_counts[flat_name] > 1:
+            rel_dir = os.path.dirname(rel_p)
+            out_fname = os.path.join(rel_dir, flat_name) if rel_dir else flat_name
+        else:
+            out_fname = flat_name
+
+        out_file_path = os.path.join(out_redact_dir, out_fname)
+        os.makedirs(os.path.dirname(out_file_path), exist_ok=True)
+
+        try:
+            structure = inspect_pdf_structure(full_p)
+            fmt = structure["format_type"]
+            engine_name, rep = _run_redaction(fmt, full_p, out_file_path, jurisdiction)
+
+            cnt = rep.get("total_entities_redacted", len(rep.get("redacted_targets", [])))
+            doc_jur = rep.get("jurisdiction", "GLOBAL")
+            total_redactions += cnt
+            batch_reports.append({
+                "original_file": rel_p,
+                "sanitized_file": out_fname,
+                "status": "SUCCESS",
+                "format_type": fmt,
+                "jurisdiction": doc_jur,
+                "engine": engine_name,
+                "entities_redacted": cnt
+            })
+        except Exception as err:
+            batch_reports.append({
+                "original_file": rel_p,
+                "status": "ERROR",
+                "error": str(err)
+            })
+
+    return batch_reports, total_redactions
+
+
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def root():
     """Serves the interactive client-side web application interface."""
@@ -452,7 +583,37 @@ async def anonymize_prescription(
     _, ext = os.path.splitext(filename)
     ext_lower = ext.lower()
 
-    # Write upload to isolated temporary file
+    # 1. Fast pre-read magic bytes validation without holding semaphore (<1ms)
+    header_bytes = await file.read(16)
+    try:
+        await file.seek(0)
+    except Exception:
+        pass
+
+    if not header_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty (0 bytes).")
+
+    is_valid_sig, _ = validate_file_signature(filename, header_bytes)
+    if not is_valid_sig:
+        return JSONResponse(
+            status_code=415,
+            content={
+                "triage_status": "IGNORED_UNSUPPORTED_FORMAT",
+                "reason": "Unsupported file type or binary signature."
+            }
+        )
+
+    # 2. Acquire semaphore before buffering entire multi-megabyte payload into RAM
+    timeout = _get_semaphore_timeout()
+    try:
+        await asyncio.wait_for(PIPELINE_SEMAPHORE.acquire(), timeout=timeout)
+    except (asyncio.TimeoutError, TimeoutError):
+        return JSONResponse(
+            status_code=503,
+            headers={"Retry-After": "5"},
+            content={"detail": "Server busy processing another document. Retrying shortly..."}
+        )
+
     req_id = uuid.uuid4().hex
     temp_dir = f"/tmp/pharmacon_api_{req_id}"
     os.makedirs(temp_dir, exist_ok=True)
@@ -470,23 +631,16 @@ async def anonymize_prescription(
         except Exception:
             pass
 
-        is_valid_sig, _ = validate_file_signature(filename, content[:16])
-        if not is_valid_sig:
-            return JSONResponse(
-                status_code=415,
-                content={
-                    "triage_status": "IGNORED_UNSUPPORTED_FORMAT",
-                    "reason": "Unsupported file type or binary signature."
-                }
-            )
-
         with open(input_path, "wb") as f:
             f.write(content)
+        del content
 
         structure = inspect_pdf_structure(input_path)
         fmt = structure["format_type"]
 
-        engine_name, report = _run_redaction(fmt, input_path, output_path, jurisdiction, force_prescription=force_prescription)
+        engine_name, report = await asyncio.to_thread(
+            _run_redaction, fmt, input_path, output_path, jurisdiction, force_prescription
+        )
 
         redacted_count = report.get("total_entities_redacted", len(report.get("redacted_targets", [])))
         active_jurisdiction = report.get("jurisdiction", "GLOBAL")
@@ -563,8 +717,14 @@ async def anonymize_prescription(
             "review_reasons": reasons
         })
     finally:
+        try:
+            if 'content' in locals():
+                del content
+        except Exception:
+            pass
         _cleanup_dir(temp_dir)
         _purge_system_memory()
+        PIPELINE_SEMAPHORE.release()
 
 
 @app.post("/anonymize/file", tags=["Redaction"])
@@ -589,6 +749,37 @@ async def anonymize_prescription_file_download(
     stem, ext = os.path.splitext(filename)
     ext_lower = ext.lower()
 
+    # 1. Fast pre-read magic bytes validation without holding semaphore (<1ms)
+    header_bytes = await file.read(16)
+    try:
+        await file.seek(0)
+    except Exception:
+        pass
+
+    if not header_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty (0 bytes).")
+
+    is_valid_sig, _ = validate_file_signature(filename, header_bytes)
+    if not is_valid_sig:
+        return JSONResponse(
+            status_code=415,
+            content={
+                "triage_status": "IGNORED_UNSUPPORTED_FORMAT",
+                "reason": "Unsupported file type or binary signature."
+            }
+        )
+
+    # 2. Acquire semaphore before buffering entire multi-megabyte payload into RAM
+    timeout = _get_semaphore_timeout()
+    try:
+        await asyncio.wait_for(PIPELINE_SEMAPHORE.acquire(), timeout=timeout)
+    except (asyncio.TimeoutError, TimeoutError):
+        return JSONResponse(
+            status_code=503,
+            headers={"Retry-After": "5"},
+            content={"detail": "Server busy processing another document. Retrying shortly..."}
+        )
+
     req_id = uuid.uuid4().hex
     temp_dir = f"/tmp/pharmacon_file_{req_id}"
     os.makedirs(temp_dir, exist_ok=True)
@@ -606,23 +797,16 @@ async def anonymize_prescription_file_download(
         except Exception:
             pass
 
-        is_valid_sig, _ = validate_file_signature(filename, content[:16])
-        if not is_valid_sig:
-            return JSONResponse(
-                status_code=415,
-                content={
-                    "triage_status": "IGNORED_UNSUPPORTED_FORMAT",
-                    "reason": "Unsupported file type or binary signature."
-                }
-            )
-
         with open(input_path, "wb") as f:
             f.write(content)
+        del content
 
         structure = inspect_pdf_structure(input_path)
         fmt = structure["format_type"]
 
-        engine_name, report = _run_redaction(fmt, input_path, output_path, jurisdiction, force_prescription=force_prescription)
+        engine_name, report = await asyncio.to_thread(
+            _run_redaction, fmt, input_path, output_path, jurisdiction, force_prescription
+        )
 
         redacted_count = report.get("total_entities_redacted", len(report.get("redacted_targets", [])))
         active_jurisdiction = report.get("jurisdiction", "GLOBAL")
@@ -660,8 +844,14 @@ async def anonymize_prescription_file_download(
             }
         )
     finally:
+        try:
+            if 'content' in locals():
+                del content
+        except Exception:
+            pass
         _cleanup_dir(temp_dir)
         _purge_system_memory()
+        PIPELINE_SEMAPHORE.release()
 
 
 @app.post("/anonymize/preview", response_model=PreviewResponse, tags=["Redaction"])
@@ -692,6 +882,37 @@ async def anonymize_prescription_preview(
     stem, ext = os.path.splitext(filename)
     ext_lower = ext.lower()
 
+    # 1. Fast pre-read magic bytes validation without holding semaphore (<1ms)
+    header_bytes = await file.read(16)
+    try:
+        await file.seek(0)
+    except Exception:
+        pass
+
+    if not header_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty (0 bytes).")
+
+    is_valid_sig, _ = validate_file_signature(filename, header_bytes)
+    if not is_valid_sig:
+        return JSONResponse(
+            status_code=415,
+            content={
+                "triage_status": "IGNORED_UNSUPPORTED_FORMAT",
+                "reason": "Unsupported file type or binary signature."
+            }
+        )
+
+    # 2. Acquire semaphore before buffering entire multi-megabyte payload into RAM
+    timeout = _get_semaphore_timeout()
+    try:
+        await asyncio.wait_for(PIPELINE_SEMAPHORE.acquire(), timeout=timeout)
+    except (asyncio.TimeoutError, TimeoutError):
+        return JSONResponse(
+            status_code=503,
+            headers={"Retry-After": "5"},
+            content={"detail": "Server busy processing another document. Retrying shortly..."}
+        )
+
     req_id = uuid.uuid4().hex
     temp_dir = f"/tmp/pharmacon_preview_{req_id}"
     os.makedirs(temp_dir, exist_ok=True)
@@ -709,23 +930,16 @@ async def anonymize_prescription_preview(
         except Exception:
             pass
 
-        is_valid_sig, _ = validate_file_signature(filename, content[:16])
-        if not is_valid_sig:
-            return JSONResponse(
-                status_code=415,
-                content={
-                    "triage_status": "IGNORED_UNSUPPORTED_FORMAT",
-                    "reason": "Unsupported file type or binary signature."
-                }
-            )
-
         with open(input_path, "wb") as f:
             f.write(content)
+        del content
 
         structure = inspect_pdf_structure(input_path)
         fmt = structure["format_type"]
 
-        engine_name, report = _run_redaction(fmt, input_path, output_path, jurisdiction, force_prescription=force_prescription)
+        engine_name, report = await asyncio.to_thread(
+            _run_redaction, fmt, input_path, output_path, jurisdiction, force_prescription
+        )
 
         redacted_count = report.get("total_entities_redacted", len(report.get("redacted_targets", [])))
         active_jurisdiction = report.get("jurisdiction", "GLOBAL")
@@ -765,57 +979,9 @@ async def anonymize_prescription_preview(
         if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
             raise HTTPException(status_code=500, detail="Sanitized file output was not generated or is empty.")
 
-        is_low_mem = os.environ.get("RENDER_LOW_MEMORY") == "1"
-        preview_dpi = 80 if is_low_mem else 150
-        preview_max_h = 700 if is_low_mem else None
-        preview_fmt = "JPEG" if is_low_mem else "PNG"
-        preview_quality = 72 if is_low_mem else 85
-
-        orig_pil = _render_page_to_pil(input_path, page_num=page, dpi=preview_dpi, max_height=preview_max_h)
-        red_pil = _render_page_to_pil(output_path, page_num=page, dpi=preview_dpi, max_height=preview_max_h)
-
-        side_by_side_b64 = _generate_side_by_side_base64(
-            orig_pil, red_pil,
-            triage_status=triage_stat,
-            confidence=conf_score
+        orig_preview_b64, red_preview_b64, side_by_side_b64, download_b64 = await asyncio.to_thread(
+            _build_preview_payload, input_path, output_path, page, triage_stat, conf_score, ext_lower, mime_type
         )
-        orig_preview_b64 = _pil_to_base64_data_uri(orig_pil, format=preview_fmt, quality=preview_quality)
-        red_preview_b64 = _pil_to_base64_data_uri(red_pil, format=preview_fmt, quality=preview_quality)
-        del orig_pil, red_pil
-
-        try:
-            pymupdf.TOOLS.store_shrink(100)
-        except Exception:
-            pass
-        gc.collect()
-        try:
-            import ctypes
-            ctypes.CDLL("libc.so.6").malloc_trim(0)
-        except Exception:
-            pass
-
-        if is_low_mem and ext_lower in {".jpg", ".jpeg", ".png", ".webp"}:
-            download_b64 = red_preview_b64
-        else:
-            if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
-                raise RuntimeError(f"Redacted output file is missing or empty at {output_path}")
-            with open(output_path, "rb") as out_f:
-                file_bytes = out_f.read()
-            file_b64_str = base64.b64encode(file_bytes).decode("utf-8")
-            del file_bytes
-            download_b64 = f"data:{mime_type};base64,{file_b64_str}"
-            del file_b64_str
-
-        try:
-            pymupdf.TOOLS.store_shrink(100)
-        except Exception:
-            pass
-        gc.collect()
-        try:
-            import ctypes
-            ctypes.CDLL("libc.so.6").malloc_trim(0)
-        except Exception:
-            pass
 
         return JSONResponse(content={
             "status": "SUCCESS",
@@ -840,8 +1006,14 @@ async def anonymize_prescription_preview(
             "data_uri": download_b64
         })
     finally:
+        try:
+            if 'content' in locals():
+                del content
+        except Exception:
+            pass
         _cleanup_dir(temp_dir)
         _purge_system_memory()
+        PIPELINE_SEMAPHORE.release()
 
 
 @app.post("/anonymize/batch", tags=["Redaction"])
@@ -862,6 +1034,28 @@ async def anonymize_batch_archive(
     if not filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="Uploaded file must be a .zip archive.")
 
+    # 1. Fast pre-read magic bytes validation without holding semaphore (<1ms)
+    header_bytes = await file.read(16)
+    try:
+        await file.seek(0)
+    except Exception:
+        pass
+    if not header_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded zip archive is empty (0 bytes).")
+    if not header_bytes.startswith(b"PK"):
+        raise HTTPException(status_code=400, detail="Uploaded file is not a valid ZIP archive.")
+
+    # 2. Acquire semaphore before buffering entire multi-megabyte payload into RAM
+    timeout = _get_semaphore_timeout()
+    try:
+        await asyncio.wait_for(PIPELINE_SEMAPHORE.acquire(), timeout=timeout)
+    except (asyncio.TimeoutError, TimeoutError):
+        return JSONResponse(
+            status_code=503,
+            headers={"Retry-After": "5"},
+            content={"detail": "Server busy processing another document. Retrying shortly..."}
+        )
+
     req_id = uuid.uuid4().hex
     temp_dir = f"/tmp/pharmacon_batch_{req_id}"
     in_extract_dir = os.path.join(temp_dir, "extracted")
@@ -873,12 +1067,14 @@ async def anonymize_batch_archive(
     archive_output_path = os.path.join(temp_dir, f"anonymized_batch_{req_id[:8]}.zip")
 
     try:
+        content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="Uploaded zip archive is empty (0 bytes).")
+        with open(archive_input_path, "wb") as f:
+            f.write(content)
+        del content
+
         try:
-            content = await file.read()
-            if not content:
-                raise HTTPException(status_code=400, detail="Uploaded zip archive is empty (0 bytes).")
-            with open(archive_input_path, "wb") as f:
-                f.write(content)
             with zipfile.ZipFile(archive_input_path, "r") as zf:
                 for member in zf.infolist():
                     # Prevent Zip-Slip directory traversal vulnerability
@@ -910,52 +1106,9 @@ async def anonymize_batch_archive(
                 detail=f"No supported prescription files found in archive. Supported formats: {sorted(list(SUPPORTED_EXTENSIONS))}"
             )
 
-        batch_reports = []
-        total_redactions = 0
-
-        # Detect filename collisions across subdirectories
-        name_counts: Dict[str, int] = {}
-        for full_p, rel_p, fname, ext in found_files:
-            base_cand = f"{os.path.splitext(fname)[0]}_anonymized{ext}"
-            name_counts[base_cand] = name_counts.get(base_cand, 0) + 1
-
-        for full_p, rel_p, fname, ext in found_files:
-            name_no_ext = os.path.splitext(fname)[0]
-            flat_name = f"{name_no_ext}_anonymized{ext}"
-
-            # If collision exists across folders, preserve subfolder path; keep flat when unique
-            if name_counts[flat_name] > 1:
-                rel_dir = os.path.dirname(rel_p)
-                out_fname = os.path.join(rel_dir, flat_name) if rel_dir else flat_name
-            else:
-                out_fname = flat_name
-
-            out_file_path = os.path.join(out_redact_dir, out_fname)
-            os.makedirs(os.path.dirname(out_file_path), exist_ok=True)
-
-            try:
-                structure = inspect_pdf_structure(full_p)
-                fmt = structure["format_type"]
-                engine_name, rep = _run_redaction(fmt, full_p, out_file_path, jurisdiction)
-
-                cnt = rep.get("total_entities_redacted", len(rep.get("redacted_targets", [])))
-                doc_jur = rep.get("jurisdiction", "GLOBAL")
-                total_redactions += cnt
-                batch_reports.append({
-                    "original_file": rel_p,
-                    "sanitized_file": out_fname,
-                    "status": "SUCCESS",
-                    "format_type": fmt,
-                    "jurisdiction": doc_jur,
-                    "engine": engine_name,
-                    "entities_redacted": cnt
-                })
-            except Exception as err:
-                batch_reports.append({
-                    "original_file": rel_p,
-                    "status": "ERROR",
-                    "error": str(err)
-                })
+        batch_reports, total_redactions = await asyncio.to_thread(
+            _process_batch_sync, in_extract_dir, out_redact_dir, found_files, jurisdiction
+        )
 
         summary_data = {
             "service": "Pharmacon Medical Prescription Anonymizer",
@@ -992,8 +1145,14 @@ async def anonymize_batch_archive(
             }
         )
     finally:
+        try:
+            if 'content' in locals():
+                del content
+        except Exception:
+            pass
         _cleanup_dir(temp_dir)
         _purge_system_memory()
+        PIPELINE_SEMAPHORE.release()
 
 
 if __name__ == "__main__":
