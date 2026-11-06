@@ -427,8 +427,8 @@ def _build_preview_payload(
     is_low_mem = os.environ.get("RENDER_LOW_MEMORY") == "1"
     preview_dpi = 80 if is_low_mem else 150
     preview_max_h = 900
-    preview_fmt = "JPEG"
-    preview_quality = 82
+    preview_fmt = "JPEG" if is_low_mem else "PNG"
+    preview_quality = 82 if is_low_mem else 95
 
     orig_pil = _render_page_to_pil(input_path, page_num=page, dpi=preview_dpi, max_height=preview_max_h)
     red_pil = _render_page_to_pil(output_path, page_num=page, dpi=preview_dpi, max_height=preview_max_h)
