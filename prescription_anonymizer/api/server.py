@@ -27,8 +27,6 @@ import traceback
 from typing import Any, Dict, List, Optional, Set, Tuple, Union, Literal
 from pydantic import BaseModel, Field
 from PIL import Image, ImageDraw, ImageFont
-import pymupdf
-
 from fastapi import FastAPI, File, UploadFile, Query, HTTPException, BackgroundTasks, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
@@ -40,14 +38,10 @@ if PROJECT_ROOT not in sys.path:
 
 try:
     from prescription_anonymizer.src.raster_checker import inspect_pdf_structure
-    from prescription_anonymizer.src.vector_redactor import VectorPDFRedactor
-    from prescription_anonymizer.src.image_redactor import LocalImageRedactor, resolve_tessdata_path
     from prescription_anonymizer.src.document_validator import validate_file_signature
     from prescription_anonymizer.api.frontend import get_web_app_html
 except ImportError:
     from src.raster_checker import inspect_pdf_structure
-    from src.vector_redactor import VectorPDFRedactor
-    from src.image_redactor import LocalImageRedactor, resolve_tessdata_path
     from src.document_validator import validate_file_signature
     from api.frontend import get_web_app_html
 
@@ -203,18 +197,26 @@ _vector_engine: Optional[VectorPDFRedactor] = None
 _image_engine: Optional[LocalImageRedactor] = None
 
 
-def get_vector_redactor() -> VectorPDFRedactor:
+def get_vector_redactor():
     """Lazily instantiates and returns the VectorPDFRedactor singleton."""
     global _vector_engine
     if _vector_engine is None:
+        try:
+            from prescription_anonymizer.src.vector_redactor import VectorPDFRedactor
+        except ImportError:
+            from src.vector_redactor import VectorPDFRedactor
         _vector_engine = VectorPDFRedactor()
     return _vector_engine
 
 
-def get_redactor() -> LocalImageRedactor:
+def get_redactor():
     """Lazily instantiates and returns the LocalImageRedactor singleton."""
     global _image_engine
     if _image_engine is None:
+        try:
+            from prescription_anonymizer.src.image_redactor import LocalImageRedactor
+        except ImportError:
+            from src.image_redactor import LocalImageRedactor
         _image_engine = LocalImageRedactor()
     return _image_engine
 
@@ -238,7 +240,8 @@ def _cleanup_dir(dir_path: str):
 def _purge_system_memory():
     """Purges PyMuPDF global cache, trims malloc arenas, and clears engine state."""
     try:
-        pymupdf.TOOLS.store_shrink(100)
+        if "pymupdf" in sys.modules:
+            sys.modules["pymupdf"].TOOLS.store_shrink(100)
     except Exception:
         pass
     gc.collect()
@@ -269,6 +272,7 @@ def _render_page_to_pil(file_path: str, page_num: int = 0, dpi: int = 150, max_h
     is_low_mem = os.environ.get("RENDER_LOW_MEMORY") == "1"
     img = None
     if ext_lower == ".pdf":
+        import pymupdf
         doc = pymupdf.open(file_path)
         try:
             if len(doc) == 0:
@@ -302,6 +306,7 @@ def _render_page_to_pil(file_path: str, page_num: int = 0, dpi: int = 150, max_h
                     im.thumbnail((target_dim, target_dim), Image.Resampling.BILINEAR)
                 img = im.convert("RGB")
         except Exception:
+            import pymupdf
             doc = pymupdf.open(file_path)
             try:
                 pix = doc[0].get_pixmap(dpi=dpi)
@@ -443,7 +448,8 @@ def _build_preview_payload(
     del orig_pil, red_pil
 
     try:
-        pymupdf.TOOLS.store_shrink(100)
+        if "pymupdf" in sys.modules:
+            sys.modules["pymupdf"].TOOLS.store_shrink(100)
     except Exception:
         pass
     gc.collect()
@@ -466,7 +472,8 @@ def _build_preview_payload(
         del file_b64_str
 
     try:
-        pymupdf.TOOLS.store_shrink(100)
+        if "pymupdf" in sys.modules:
+            sys.modules["pymupdf"].TOOLS.store_shrink(100)
     except Exception:
         pass
     gc.collect()

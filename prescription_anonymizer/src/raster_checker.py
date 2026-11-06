@@ -16,8 +16,6 @@ def inspect_pdf_structure(pdf_path: str) -> Dict[str, Any]:
     - Counts embedded raster images.
     - Determines whether the document is digital vector or scanned raster.
     """
-    import pymupdf as fitz
-
     if not os.path.exists(pdf_path):
         raise FileNotFoundError(f"File not found at {pdf_path}")
 
@@ -38,6 +36,8 @@ def inspect_pdf_structure(pdf_path: str) -> Dict[str, Any]:
                 "is_raster": True
             }]
         }
+
+    import pymupdf as fitz
 
     with fitz.open(pdf_path) as doc:
         page_reports: List[Dict[str, Any]] = []

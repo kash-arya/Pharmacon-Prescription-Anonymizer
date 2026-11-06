@@ -20,7 +20,6 @@ class LocalNEREngine:
     def __new__(cls) -> "LocalNEREngine":
         if cls._instance is None:
             cls._instance = super().__new__(cls)
-            cls._instance._init_models()
         return cls._instance
 
     def _init_models(self) -> None:
@@ -156,8 +155,9 @@ class LocalNEREngine:
                     })
 
         models = []
-        if self._nlp_en is not None:
-            models.append((self._nlp_en, "en"))
+        nlp_en = self.nlp
+        if nlp_en is not None:
+            models.append((nlp_en, "en"))
 
         has_eu_markers = bool(re.search(
             r"[äöüßéèêëàâîïôûùçñáíóúÁÉÍÓÚÑÄÖÜ]|\b(?:Rezept|Krankenkasse|Geb|Ausstellungsdatum|Vorname|Unterschrift|Arzt|Receta|Ordonnance|Médicament|Apotheke)\b",
