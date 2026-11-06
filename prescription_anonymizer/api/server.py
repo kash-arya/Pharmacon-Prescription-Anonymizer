@@ -744,9 +744,11 @@ async def anonymize_prescription(
                 del content
         except Exception:
             pass
-        _cleanup_dir(temp_dir)
-        _purge_system_memory()
-        PIPELINE_SEMAPHORE.release()
+        try:
+            _cleanup_dir(temp_dir)
+            _purge_system_memory()
+        finally:
+            PIPELINE_SEMAPHORE.release()
 
 
 @app.post("/anonymize/file", tags=["Redaction"])
@@ -877,9 +879,11 @@ async def anonymize_prescription_file_download(
                 del content
         except Exception:
             pass
-        _cleanup_dir(temp_dir)
-        _purge_system_memory()
-        PIPELINE_SEMAPHORE.release()
+        try:
+            _cleanup_dir(temp_dir)
+            _purge_system_memory()
+        finally:
+            PIPELINE_SEMAPHORE.release()
 
 
 @app.post("/anonymize/preview", response_model=PreviewResponse, tags=["Redaction"])
@@ -1045,9 +1049,11 @@ async def anonymize_prescription_preview(
                 del content
         except Exception:
             pass
-        _cleanup_dir(temp_dir)
-        _purge_system_memory()
-        PIPELINE_SEMAPHORE.release()
+        try:
+            _cleanup_dir(temp_dir)
+            _purge_system_memory()
+        finally:
+            PIPELINE_SEMAPHORE.release()
 
 
 @app.post("/anonymize/batch", tags=["Redaction"])
@@ -1184,9 +1190,11 @@ async def anonymize_batch_archive(
                 del content
         except Exception:
             pass
-        _cleanup_dir(temp_dir)
-        _purge_system_memory()
-        PIPELINE_SEMAPHORE.release()
+        try:
+            _cleanup_dir(temp_dir)
+            _purge_system_memory()
+        finally:
+            PIPELINE_SEMAPHORE.release()
 
 
 if __name__ == "__main__":
