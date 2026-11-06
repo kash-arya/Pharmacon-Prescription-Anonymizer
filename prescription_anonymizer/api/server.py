@@ -559,6 +559,7 @@ async def api_info():
 async def health_check():
     """Health and readiness probe."""
     _purge_system_memory()
+    from src.ocr_preprocess import resolve_tessdata_path
     tess_path = resolve_tessdata_path()
     return {
         "status": "ok",
