@@ -496,7 +496,8 @@ def get_web_app_html() -> str:
             if (!blob) {
               return resolve(file);
             }
-            const scaledFile = new File([blob], file.name, {
+            const baseName = (file.name || 'image').replace(/\\.[^/.]+$/, '');
+            const scaledFile = new File([blob], baseName + '.jpg', {
               type: 'image/jpeg',
               lastModified: file.lastModified || Date.now()
             });

@@ -611,7 +611,7 @@ async def anonymize_prescription(
     if not header_bytes:
         raise HTTPException(status_code=400, detail="Uploaded file is empty (0 bytes).")
 
-    is_valid_sig, _ = validate_file_signature(filename, header_bytes)
+    is_valid_sig, doc_type = validate_file_signature(filename, header_bytes)
     if not is_valid_sig:
         return JSONResponse(
             status_code=415,
@@ -620,6 +620,11 @@ async def anonymize_prescription(
                 "reason": "Unsupported file type or binary signature."
             }
         )
+
+    if doc_type == "JPEG" and ext_lower not in (".jpg", ".jpeg"):
+        ext_lower = ".jpg"
+    elif doc_type == "PNG" and ext_lower != ".png":
+        ext_lower = ".png"
 
     # 2. Acquire semaphore before buffering entire multi-megabyte payload into RAM
     timeout = _get_semaphore_timeout()
@@ -778,7 +783,7 @@ async def anonymize_prescription_file_download(
     if not header_bytes:
         raise HTTPException(status_code=400, detail="Uploaded file is empty (0 bytes).")
 
-    is_valid_sig, _ = validate_file_signature(filename, header_bytes)
+    is_valid_sig, doc_type = validate_file_signature(filename, header_bytes)
     if not is_valid_sig:
         return JSONResponse(
             status_code=415,
@@ -787,6 +792,11 @@ async def anonymize_prescription_file_download(
                 "reason": "Unsupported file type or binary signature."
             }
         )
+
+    if doc_type == "JPEG" and ext_lower not in (".jpg", ".jpeg"):
+        ext_lower = ".jpg"
+    elif doc_type == "PNG" and ext_lower != ".png":
+        ext_lower = ".png"
 
     # 2. Acquire semaphore before buffering entire multi-megabyte payload into RAM
     timeout = _get_semaphore_timeout()
@@ -912,7 +922,7 @@ async def anonymize_prescription_preview(
     if not header_bytes:
         raise HTTPException(status_code=400, detail="Uploaded file is empty (0 bytes).")
 
-    is_valid_sig, _ = validate_file_signature(filename, header_bytes)
+    is_valid_sig, doc_type = validate_file_signature(filename, header_bytes)
     if not is_valid_sig:
         return JSONResponse(
             status_code=415,
@@ -921,6 +931,11 @@ async def anonymize_prescription_preview(
                 "reason": "Unsupported file type or binary signature."
             }
         )
+
+    if doc_type == "JPEG" and ext_lower not in (".jpg", ".jpeg"):
+        ext_lower = ".jpg"
+    elif doc_type == "PNG" and ext_lower != ".png":
+        ext_lower = ".png"
 
     # 2. Acquire semaphore before buffering entire multi-megabyte payload into RAM
     timeout = _get_semaphore_timeout()

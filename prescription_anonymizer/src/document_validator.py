@@ -13,7 +13,7 @@ except ImportError:
     from prescription_anonymizer.src.entities import is_whitelisted
 
 
-SUPPORTED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg"}
+SUPPORTED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".webp"}
 
 # Category A: Hard Clinical & Provider Markers (+2.0 pts each, cap at 6.0 pts)
 CAT_A_PATTERNS = [
@@ -95,6 +95,9 @@ _COMPILED_CAT_E = [re.compile(p, re.IGNORECASE if "import" not in p and "def" no
 def validate_file_signature(filename: str, header_bytes: bytes) -> Tuple[bool, str]:
     """
     Validates file extension and binary magic bytes.
+    Accepts PDF, PNG, JPEG, and WEBP.
+    Tolerates client canvas re-encoding where extension might not match
+    the underlying image payload.
     Returns (True, format_str) on success, or (False, 'UNSUPPORTED_FILE_FORMAT').
     """
     if not filename or not header_bytes:
@@ -106,18 +109,14 @@ def validate_file_signature(filename: str, header_bytes: bytes) -> Tuple[bool, s
     if ext_lower not in SUPPORTED_EXTENSIONS:
         return False, "UNSUPPORTED_FILE_FORMAT"
 
-    if ext_lower == ".pdf":
-        if header_bytes.startswith(b"%PDF-"):
-            return True, "PDF"
-        return False, "UNSUPPORTED_FILE_FORMAT"
-    elif ext_lower == ".png":
-        if header_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
-            return True, "PNG"
-        return False, "UNSUPPORTED_FILE_FORMAT"
-    elif ext_lower in (".jpg", ".jpeg"):
-        if header_bytes.startswith(b"\xff\xd8\xff"):
-            return True, "JPEG"
-        return False, "UNSUPPORTED_FILE_FORMAT"
+    if header_bytes.startswith(b"%PDF-"):
+        return True, "PDF"
+    elif header_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return True, "PNG"
+    elif header_bytes.startswith(b"\xff\xd8\xff"):
+        return True, "JPEG"
+    elif header_bytes.startswith(b"RIFF") and len(header_bytes) >= 12 and header_bytes[8:12] == b"WEBP":
+        return True, "WEBP"
 
     return False, "UNSUPPORTED_FILE_FORMAT"
 
