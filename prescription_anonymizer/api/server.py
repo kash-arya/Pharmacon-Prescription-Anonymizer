@@ -23,12 +23,13 @@ import io
 import gc
 import ctypes
 import asyncio
+import traceback
 from typing import Any, Dict, List, Optional, Set, Tuple, Union, Literal
 from pydantic import BaseModel, Field
 from PIL import Image, ImageDraw, ImageFont
 import pymupdf
 
-from fastapi import FastAPI, File, UploadFile, Query, HTTPException, BackgroundTasks, Response
+from fastapi import FastAPI, File, UploadFile, Query, HTTPException, BackgroundTasks, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 
@@ -171,6 +172,23 @@ app.add_middleware(
         "X-Format-Type"
     ]
 )
+
+
+@app.exception_handler(Exception)
+async def global_unhandled_exception_handler(request: Request, exc: Exception):
+    """
+    Catches all unhandled exceptions, prints the full traceback to stdout/stderr
+    so Render logs display the root cause, and returns structured JSON detail.
+    """
+    traceback.print_exc()
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": f"Internal Server Error: {str(exc)}",
+            "error_type": exc.__class__.__name__
+        }
+    )
+
 
 # Non-blocking single-concurrency pipeline semaphore to eliminate multi-user OOM crashes
 PIPELINE_SEMAPHORE = asyncio.Semaphore(1)
@@ -579,8 +597,8 @@ async def anonymize_prescription(
     - Masks all 18 HIPAA Safe Harbor and DPDP PII/PHI categories.
     - Strictly protects clinical pharmacology and diagnostic findings.
     """
-    filename = file.filename or "prescription.pdf"
-    _, ext = os.path.splitext(filename)
+    filename = os.path.basename(file.filename or "prescription.pdf")
+    stem, ext = os.path.splitext(filename)
     ext_lower = ext.lower()
 
     # 1. Fast pre-read magic bytes validation without holding semaphore (<1ms)
@@ -631,6 +649,7 @@ async def anonymize_prescription(
         except Exception:
             pass
 
+        os.makedirs(os.path.dirname(input_path), exist_ok=True)
         with open(input_path, "wb") as f:
             f.write(content)
         del content
@@ -745,7 +764,7 @@ async def anonymize_prescription_file_download(
     De-identifies a prescription and streams back the sanitized file in the exact same
     file extension and MIME type as uploaded, with Content-Disposition attachment header.
     """
-    filename = file.filename or "prescription.pdf"
+    filename = os.path.basename(file.filename or "prescription.pdf")
     stem, ext = os.path.splitext(filename)
     ext_lower = ext.lower()
 
@@ -797,6 +816,7 @@ async def anonymize_prescription_file_download(
         except Exception:
             pass
 
+        os.makedirs(os.path.dirname(input_path), exist_ok=True)
         with open(input_path, "wb") as f:
             f.write(content)
         del content
@@ -878,7 +898,7 @@ async def anonymize_prescription_preview(
       allowing one-click instant client-side downloads without a second request
     - Deterministic audit confidence score, triage verdict, and entity count.
     """
-    filename = file.filename or "prescription.pdf"
+    filename = os.path.basename(file.filename or "prescription.pdf")
     stem, ext = os.path.splitext(filename)
     ext_lower = ext.lower()
 
@@ -930,6 +950,7 @@ async def anonymize_prescription_preview(
         except Exception:
             pass
 
+        os.makedirs(os.path.dirname(input_path), exist_ok=True)
         with open(input_path, "wb") as f:
             f.write(content)
         del content
@@ -1030,7 +1051,7 @@ async def anonymize_batch_archive(
     Batch de-identifies an entire ZIP archive of prescriptions.
     Returns a ZIP archive containing all sanitized documents along with 'batch_audit_summary.json'.
     """
-    filename = file.filename or "batch.zip"
+    filename = os.path.basename(file.filename or "batch.zip")
     if not filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="Uploaded file must be a .zip archive.")
 
