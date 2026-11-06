@@ -16,6 +16,7 @@ env.bak/
 venv.bak/
 
 # Testing, Benchmarking & Code Quality
+tests/fixtures/prscrptn/
 .pytest_cache/
 .coverage
 .coverage.*

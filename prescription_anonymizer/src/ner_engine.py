@@ -26,12 +26,12 @@ class LocalNEREngine:
     def _init_models(self) -> None:
         if os.environ.get("RENDER_LOW_MEMORY") == "1":
             try:
-                import spacy
-                self._nlp_en = spacy.load("en_core_web_sm", disable=["parser", "tagger", "attribute_ruler", "lemmatizer"])
+                import en_core_web_sm
+                self._nlp_en = en_core_web_sm.load(exclude=["parser", "tagger", "attribute_ruler", "lemmatizer", "senter"])
             except Exception:
                 try:
-                    import en_core_web_sm
-                    self._nlp_en = en_core_web_sm.load(disable=["parser", "tagger", "attribute_ruler", "lemmatizer"])
+                    import spacy
+                    self._nlp_en = spacy.load("en_core_web_sm", exclude=["parser", "tagger", "attribute_ruler", "lemmatizer", "senter"])
                 except Exception:
                     self._nlp_en = None
             self._nlp_xx = None
@@ -39,11 +39,11 @@ class LocalNEREngine:
 
         try:
             import en_core_web_sm
-            self._nlp_en = en_core_web_sm.load(exclude=["parser", "lemmatizer", "attribute_ruler", "tagger"])
+            self._nlp_en = en_core_web_sm.load(exclude=["parser", "lemmatizer", "attribute_ruler", "tagger", "senter"])
         except Exception:
             try:
                 import spacy
-                self._nlp_en = spacy.load("en_core_web_sm", exclude=["parser", "lemmatizer", "attribute_ruler", "tagger"])
+                self._nlp_en = spacy.load("en_core_web_sm", exclude=["parser", "lemmatizer", "attribute_ruler", "tagger", "senter"])
             except Exception:
                 self._nlp_en = None
 
