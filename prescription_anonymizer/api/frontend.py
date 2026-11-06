@@ -199,6 +199,9 @@ def get_web_app_html() -> str:
             <button id="btn-cancel-queue" onclick="cancelProcessingQueue()" class="hidden px-3 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/40 rounded-lg text-xs font-mono transition-colors">
               ⏹ Cancel Processing
             </button>
+            <button id="btn-retry-queue" onclick="retryFailedQueue()" class="hidden px-3.5 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg text-xs font-mono shadow-md transition-all flex items-center gap-1.5">
+              <span>🔄</span> <span>Retry Failed</span>
+            </button>
             <button id="btn-download-all" onclick="downloadAllRedacted()" class="hidden px-3.5 py-1 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-lg text-xs font-mono shadow-md transition-all flex items-center gap-1.5">
               <span>⬇</span> <span id="download-all-text">Download All Redacted (0)</span>
             </button>
@@ -665,6 +668,7 @@ def get_web_app_html() -> str:
     const queuePct = document.getElementById('queue-pct');
     const queueSpinner = document.getElementById('queue-spinner');
     const btnCancelQueue = document.getElementById('btn-cancel-queue');
+    const btnRetryQueue = document.getElementById('btn-retry-queue');
     const btnDownloadAll = document.getElementById('btn-download-all');
     const downloadAllText = document.getElementById('download-all-text');
 
@@ -797,6 +801,7 @@ def get_web_app_html() -> str:
 
       queueCard.classList.remove('hidden');
       btnCancelQueue.classList.remove('hidden');
+      btnRetryQueue.classList.add('hidden');
       queueSpinner.classList.remove('hidden');
 
       const jurSelect = document.getElementById('jurisdiction-select');
@@ -816,10 +821,11 @@ def get_web_app_html() -> str:
         let rawText = '';
         let data = null;
         let retryCount = 0;
-        const max503Retries = 2;
+        const maxRetries = 2;
+        let circuitBroken = false;
 
         try {
-          while (retryCount <= max503Retries) {
+          while (retryCount <= maxRetries) {
             if (!isQueueRunning) break;
             abortController = new AbortController();
 
@@ -828,19 +834,39 @@ def get_web_app_html() -> str:
             const formData = new FormData();
             formData.append('file', uploadFile);
 
-            res = await fetch(`/api/v1/anonymize/preview?page=0&jurisdiction=${encodeURIComponent(jur)}`, {
-              method: 'POST',
-              body: formData,
-              signal: abortController.signal
-            });
+            try {
+              res = await fetch(`/api/v1/anonymize/preview?page=0&jurisdiction=${encodeURIComponent(jur)}`, {
+                method: 'POST',
+                body: formData,
+                signal: abortController.signal
+              });
+            } catch (fetchErr) {
+              if (fetchErr.name === 'AbortError') throw fetchErr;
+              if (retryCount < maxRetries) {
+                retryCount++;
+                const delayMs = retryCount === 1 ? 10000 : 20000;
+                item.status = 'processing';
+                item.statusMessage = `Server connection lost — retrying in ${delayMs / 1000}s (${retryCount}/${maxRetries})...`;
+                renderQueueGallery();
+                updateQueueProgress();
+                await new Promise((resolve) => setTimeout(resolve, delayMs));
+                continue;
+              } else {
+                circuitBroken = true;
+                throw new Error('Server connection lost (restarting or unreachable).');
+              }
+            }
 
-            if (res.status === 503 && retryCount < max503Retries) {
+            // Circuit Breaker triggers for transient server errors (502 Bad Gateway, 503 Service Unavailable, 429 Rate Limit)
+            if ((res.status === 502 || res.status === 503 || res.status === 429) && retryCount < maxRetries) {
               retryCount++;
+              const delayMs = retryCount === 1 ? 10000 : 20000;
               item.status = 'processing';
-              item.statusMessage = `Server busy — queued retry (${retryCount}/${max503Retries})...`;
+              const reason = res.status === 503 ? 'busy' : (res.status === 502 ? 'restarting' : 'rate limited');
+              item.statusMessage = `Server ${reason} (HTTP ${res.status}) — retrying in ${delayMs / 1000}s (${retryCount}/${maxRetries})...`;
               renderQueueGallery();
               updateQueueProgress();
-              await new Promise((resolve) => setTimeout(resolve, 4000));
+              await new Promise((resolve) => setTimeout(resolve, delayMs));
               continue;
             }
 
@@ -850,6 +876,21 @@ def get_web_app_html() -> str:
             } catch (_) {
               data = null;
             }
+
+            if (res.status === 502 || res.status === 503 || res.status === 429) {
+              circuitBroken = true;
+              const statusDesc = res.status === 502
+                ? 'Bad Gateway (Server restarting or timed out)'
+                : (res.status === 503 ? 'Service Unavailable (Server busy)' : 'Too Many Requests');
+              let errMsg = `Server error (HTTP ${res.status}: ${statusDesc})`;
+              if (data && data.detail) {
+                errMsg = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail);
+              } else if (rawText && !rawText.trim().startsWith('<') && rawText.trim().length > 0 && rawText.length < 200) {
+                errMsg = rawText.trim();
+              }
+              throw new Error(errMsg);
+            }
+
             break;
           }
 
@@ -912,6 +953,19 @@ def get_web_app_html() -> str:
           } else {
             item.status = 'failed';
             item.error = err.message || 'Unknown processing error';
+
+            if (circuitBroken) {
+              // Circuit breaker tripped: mark all remaining queued items as "Server restarting - retry" and stop queue
+              for (let j = i + 1; j < fileQueue.length; j++) {
+                if (fileQueue[j].status === 'queued') {
+                  fileQueue[j].status = 'failed';
+                  fileQueue[j].error = 'Server restarting - retry';
+                }
+              }
+              isQueueRunning = false;
+              btnRetryQueue.classList.remove('hidden');
+              break;
+            }
           }
         } finally {
           abortController = null;
@@ -1028,6 +1082,23 @@ def get_web_app_html() -> str:
       updateQueueProgress();
     }
 
+    // Retry Failed or Cancelled Queue Items
+    function retryFailedQueue() {
+      btnRetryQueue.classList.add('hidden');
+      for (const item of fileQueue) {
+        if (item.status === 'failed' || item.status === 'cancelled') {
+          item.status = 'queued';
+          item.error = null;
+          item.statusMessage = null;
+        }
+      }
+      renderQueueGallery();
+      updateQueueProgress();
+      if (!isQueueRunning) {
+        runSequentialQueue();
+      }
+    }
+
     // Progress Calculation & Counters
     function updateQueueProgress() {
       const total = fileQueue.length;
@@ -1094,6 +1165,13 @@ def get_web_app_html() -> str:
         downloadAllText.innerText = `Download All Redacted (${completedCount})`;
       } else {
         btnDownloadAll.classList.add('hidden');
+      }
+
+      // Update Retry Failed Button
+      if (!isQueueRunning && (failedCount > 0 || fileQueue.some(item => item.status === 'cancelled'))) {
+        btnRetryQueue.classList.remove('hidden');
+      } else if (!isQueueRunning) {
+        btnRetryQueue.classList.add('hidden');
       }
     }
 
@@ -1421,6 +1499,7 @@ def get_web_app_html() -> str:
       queueCard.classList.add('hidden');
       galleryContainer.classList.add('hidden');
       resultSection.classList.add('hidden');
+      btnRetryQueue.classList.add('hidden');
       document.getElementById('ignored-banner').classList.add('hidden');
       fileInput.value = '';
       folderInput.value = '';
