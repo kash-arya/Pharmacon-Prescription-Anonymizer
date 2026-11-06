@@ -16,6 +16,9 @@ import json
 import threading
 import subprocess
 import requests
+
+session = requests.Session()
+session.trust_env = False
 import psutil
 
 PORT = 8999
@@ -83,7 +86,7 @@ def run_request(tracker: MemoryTracker, file_path: str, upload_name: str, mime: 
 
     with open(file_path, "rb") as f:
         files = {"file": (upload_name, f, mime)}
-        resp = requests.post(
+        resp = session.post(
             f"{BASE_URL}/api/v1/anonymize/preview?page=0&jurisdiction=AUTO",
             files=files,
             timeout=120
@@ -140,11 +143,11 @@ def main():
 
     try:
         # Wait for server health
-        print("Waiting for server startup...")
+        print("Waiting for server startup (CPUQuota throttled)...")
         healthy = False
-        for _ in range(60):
+        for _ in range(240):  # up to 60s under 0.1 vCPU throttling
             try:
-                r = requests.get(f"{BASE_URL}/health", timeout=1)
+                r = session.get(f"{BASE_URL}/health", timeout=1)
                 if r.status_code == 200:
                     healthy = True
                     break
@@ -152,9 +155,9 @@ def main():
                 time.sleep(0.25)
 
         if not healthy:
-            print("ERROR: Server failed to start within 15 seconds.")
-            server_proc.terminate()
-            out, err = server_proc.communicate(timeout=3)
+            print("ERROR: Server failed to start within 60 seconds.")
+            server_proc.kill()
+            out, err = server_proc.communicate(timeout=5)
             print("STDOUT:", out.decode())
             print("STDERR:", err.decode())
             return 1
@@ -164,14 +167,11 @@ def main():
         startup_rss = tracker.get_current()
         print(f"Server healthy! Initial idle RSS: {startup_rss:.2f} MB")
 
-        files_round1_2 = [
+        all_test_files = [
             ("WhatsApp Image 2026-11-05 at 07.15.55.jpeg", os.path.join(FIXTURES_DIR, "WhatsApp Image 2026-11-05 at 07.15.55.jpeg"), "image/jpeg"),
             ("WhatsApp Image 2026-11-05 at 07.15.56.jpeg", os.path.join(FIXTURES_DIR, "WhatsApp Image 2026-11-05 at 07.15.56.jpeg"), "image/jpeg"),
             ("24b7b6cb-2446-49cf-b13c-2b63a74d6446.jpeg", os.path.join(FIXTURES_DIR, "24b7b6cb-2446-49cf-b13c-2b63a74d6446.jpeg"), "image/jpeg"),
             ("3Q15_Timetable_SemV.png", os.path.join(FIXTURES_DIR, "3Q15_Timetable_SemV.png"), "image/png"),
-        ]
-
-        files_round3 = [
             ("Aryan Sept 24.jpg", os.path.join(DATA_DIR, "Aryan Sept 24.jpg"), "image/jpeg"),
             ("Aryan March 26.jpg", os.path.join(DATA_DIR, "Aryan March 26.jpg"), "image/jpeg"),
         ]
@@ -180,10 +180,10 @@ def main():
 
         # --- ROUND 1 ---
         print("\n" + "=" * 80)
-        print("ROUND 1: 4 Desktop Test Files (Initial Cold Run)")
+        print("ROUND 1: 6 Real Test Files (Cold Start + Sequential Stress)")
         print("=" * 80)
         r1_peaks = []
-        for name, path, mime in files_round1_2:
+        for name, path, mime in all_test_files:
             upload_name = f"prscrptn/{name}"
             res = run_request(tracker, path, upload_name, mime)
             res["round"] = "Round 1"
@@ -194,28 +194,16 @@ def main():
 
         # --- ROUND 2 ---
         print("\n" + "=" * 80)
-        print("ROUND 2: Repeat Exact 4 Desktop Files (Zero Memory Leak Check)")
+        print("ROUND 2: Repeat Exact 6 Real Test Files (Zero Memory Leak Check)")
         print("=" * 80)
         r2_peaks = []
-        for name, path, mime in files_round1_2:
+        for name, path, mime in all_test_files:
             upload_name = f"prscrptn/{name}"
             res = run_request(tracker, path, upload_name, mime)
             res["round"] = "Round 2"
             res["name"] = name
             results.append(res)
             r2_peaks.append(res["peak_rss_mb"])
-            print(f"[{res['round']}] {name[:36]:36} | HTTP {res['status_code']} | {res['elapsed_ms']:7.1f} ms | Peak RSS: {res['peak_rss_mb']:6.1f} MB | Triage: {res['triage_status']}")
-
-        # --- ROUND 3 ---
-        print("\n" + "=" * 80)
-        print("ROUND 3: Real High-Resolution Camera Prescriptions (Stress Test)")
-        print("=" * 80)
-        for name, path, mime in files_round3:
-            upload_name = f"prscrptn/{name}"
-            res = run_request(tracker, path, upload_name, mime)
-            res["round"] = "Round 3"
-            res["name"] = name
-            results.append(res)
             print(f"[{res['round']}] {name[:36]:36} | HTTP {res['status_code']} | {res['elapsed_ms']:7.1f} ms | Peak RSS: {res['peak_rss_mb']:6.1f} MB | Triage: {res['triage_status']}")
 
         tracker.stop()
