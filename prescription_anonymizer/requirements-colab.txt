@@ -1,0 +1,5 @@
+# Heavy ML & VLM Packages for Colab GPU Runtime / Florence-2
+torch>=2.0.0
+transformers>=4.40.0
+accelerate>=0.28.0
+timm>=0.9.0
