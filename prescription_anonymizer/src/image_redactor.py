@@ -17,6 +17,12 @@ import io
 import gc
 import pymupdf
 import cv2
+
+cv2.setNumThreads(1)
+try:
+    cv2.ocl.setUseOpenCL(False)
+except Exception:
+    pass
 import numpy as np
 from PIL import Image
 
