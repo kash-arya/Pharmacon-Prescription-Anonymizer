@@ -1133,8 +1133,8 @@ class LocalImageRedactor:
             with Image.open(input_path) as probe:
                 orig_w, orig_h = probe.size
 
-            # In low-memory mode on large photos (>= 4000px), use reduced decode to cap peak allocation < 20MB
-            if is_low_mem and max(orig_w, orig_h) >= 4000:
+            # In low-memory mode on large photos (>= 2000px), use reduced decode to cap peak allocation < 20MB
+            if is_low_mem and max(orig_w, orig_h) >= 2000:
                 img_bgr = cv2.imread(input_path, cv2.IMREAD_REDUCED_COLOR_2)
                 if img_bgr is None:
                     with Image.open(input_path) as pil_img:
@@ -1164,12 +1164,12 @@ class LocalImageRedactor:
             img_bgr = normalize_ink_contrast(img_bgr, gamma=1.6)
 
             if is_low_mem:
-                # Fast Pre-OCR Contrast Normalization:
+                # Fast Pre-OCR Contrast Normalization (uint8-only via cv2.divide):
                 lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
                 l, a, b = cv2.split(lab)
                 kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (41, 41))
                 bg = cv2.morphologyEx(l, cv2.MORPH_CLOSE, kernel)
-                norm_l = np.uint8(np.clip((l.astype(np.float32) / np.maximum(1.0, bg.astype(np.float32))) * 255.0, 0, 255))
+                norm_l = cv2.divide(l, np.maximum(1, bg), scale=255)
                 clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
                 cl = clahe.apply(norm_l)
                 lab = cv2.merge((cl, a, b))

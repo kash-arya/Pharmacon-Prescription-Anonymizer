@@ -289,8 +289,8 @@ def _render_page_to_pil(file_path: str, page_num: int = 0, dpi: int = 150, max_h
     else:
         try:
             with Image.open(file_path) as im:
-                if is_low_mem and max(im.size) > 700:
-                    target_dim = max_height or 700
+                if is_low_mem and max(im.size) > 900:
+                    target_dim = max_height or 900
                     im.draft("RGB", (target_dim, target_dim))
                     im.thumbnail((target_dim, target_dim), Image.Resampling.BILINEAR)
                 img = im.convert("RGB")
@@ -420,14 +420,15 @@ def _build_preview_payload(
     """Generates preview images and download payload synchronously in a worker thread."""
     is_low_mem = os.environ.get("RENDER_LOW_MEMORY") == "1"
     preview_dpi = 80 if is_low_mem else 150
-    preview_max_h = 700 if is_low_mem else None
-    preview_fmt = "JPEG" if is_low_mem else "PNG"
-    preview_quality = 72 if is_low_mem else 85
+    preview_max_h = 900
+    preview_fmt = "JPEG"
+    preview_quality = 82
 
     orig_pil = _render_page_to_pil(input_path, page_num=page, dpi=preview_dpi, max_height=preview_max_h)
     red_pil = _render_page_to_pil(output_path, page_num=page, dpi=preview_dpi, max_height=preview_max_h)
 
-    side_by_side_b64 = _generate_side_by_side_base64(
+    # In low-memory mode, eliminate side-by-side composite canvas to prevent memory spikes
+    side_by_side_b64 = None if is_low_mem else _generate_side_by_side_base64(
         orig_pil, red_pil,
         triage_status=triage_stat,
         confidence=conf_score

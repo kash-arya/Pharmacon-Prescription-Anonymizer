@@ -9,6 +9,10 @@ contrast enhancement for degraded smartphone photos and scanned PDFs.
 from typing import List, Dict, Any, Optional, Tuple
 import os
 import re
+
+os.environ.setdefault("OMP_THREAD_LIMIT", "1")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
 import pymupdf
 import cv2
 import numpy as np
