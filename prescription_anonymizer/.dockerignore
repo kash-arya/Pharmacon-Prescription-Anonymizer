@@ -18,13 +18,18 @@ outputs/
 reports/
 notebooks/
 docs/
-viewer/*.html
+tests/
+benchmarks/
+scripts/
+logs/
+viewer/
 
 # Input Evaluation Datasets (Excluded to keep Docker image small)
 data/samples/
 data/real_phone_prescriptions/
 data/raw_public_slips/
 data/unseen_holdout/
+data/tssdata/
 
 # Explicitly ensure tessdata is preserved
 !data/tessdata/
