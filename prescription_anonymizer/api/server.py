@@ -42,13 +42,13 @@ try:
     from prescription_anonymizer.src.vector_redactor import VectorPDFRedactor
     from prescription_anonymizer.src.image_redactor import LocalImageRedactor, resolve_tessdata_path
     from prescription_anonymizer.src.document_validator import validate_file_signature
-    from prescription_anonymizer.api.web_app import get_web_app_html
+    from prescription_anonymizer.api.frontend import get_web_app_html
 except ImportError:
     from src.raster_checker import inspect_pdf_structure
     from src.vector_redactor import VectorPDFRedactor
     from src.image_redactor import LocalImageRedactor, resolve_tessdata_path
     from src.document_validator import validate_file_signature
-    from api.web_app import get_web_app_html
+    from api.frontend import get_web_app_html
 
 SUPPORTED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".webp"}
 
