@@ -10,7 +10,7 @@ import re
 import pymupdf
 
 try:
-    from prescription_anonymizer.src.entities import (
+    from .entities import (
         BoundingBox,
         RedactionTarget,
         PATIENT_NAME_ANCHORS,
@@ -25,9 +25,9 @@ try:
         _COMPILED_WHITELIST,
         KEY_VALUE_ANCHORS,
     )
-    from prescription_anonymizer.src.jurisdiction import JurisdictionDetector
-    from prescription_anonymizer.src.ner_engine import LocalNEREngine
-except ImportError:
+    from .jurisdiction import JurisdictionDetector
+    from .ner_engine import LocalNEREngine
+except (ImportError, ValueError):
     from src.entities import (
         BoundingBox,
         RedactionTarget,

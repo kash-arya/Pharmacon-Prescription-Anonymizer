@@ -21,7 +21,7 @@ import numpy as np
 from PIL import Image
 
 try:
-    from prescription_anonymizer.src.entities import (
+    from .entities import (
         BoundingBox,
         RedactionTarget,
         KEY_VALUE_ANCHORS,
@@ -33,24 +33,24 @@ try:
         is_legal_disclaimer,
         BOUNDARY_LABEL_RE,
     )
-    from prescription_anonymizer.src.vlm_grounder import MultimodalVisualGrounder
-    from prescription_anonymizer.src.jurisdiction import JurisdictionDetector
-    from prescription_anonymizer.src.ner_engine import LocalNEREngine
-    from prescription_anonymizer.src.ocr_preprocess import (
+    from .vlm_grounder import MultimodalVisualGrounder
+    from .jurisdiction import JurisdictionDetector
+    from .ner_engine import LocalNEREngine
+    from .ocr_preprocess import (
         resolve_tessdata_path,
         get_ocr_languages,
         reconstruct_visual_lines,
         get_enhanced_fullpage_ocr,
         normalize_ink_contrast,
     )
-    from prescription_anonymizer.src.barcode_detector import detect_qr_and_barcodes
-    from prescription_anonymizer.src.form_parser import (
+    from .barcode_detector import detect_qr_and_barcodes
+    from .form_parser import (
         expand_person_span_on_line,
         detect_handwritten_fill_in_zone,
         parse_form_anchors_on_lines,
     )
-    from prescription_anonymizer.src.forensics import ForensicAuditor
-except ImportError:
+    from .forensics import ForensicAuditor
+except (ImportError, ValueError):
     from src.entities import (
         BoundingBox,
         RedactionTarget,
