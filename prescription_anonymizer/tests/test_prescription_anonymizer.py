@@ -853,6 +853,55 @@ class TestPrescriptionAnonymizer(unittest.TestCase):
             if PIPELINE_SEMAPHORE.locked():
                 PIPELINE_SEMAPHORE._value = 1
 
+    def test_pristine_unredacted_brightness_preservation(self):
+        """FIX 2: Ensure unredacted background pixels preserve original brightness within +/-3 gray levels."""
+        import cv2
+        import numpy as np
+        from src.image_redactor import LocalImageRedactor
+
+        # Create a synthetic prescription image with off-white background (gray ~205)
+        syn_w, syn_h = 700, 900
+        syn_img = np.full((syn_h, syn_w, 3), 205, dtype=np.uint8)
+
+        cv2.putText(syn_img, "PRESCRIPTION / RX SLIP", (50, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
+        cv2.putText(syn_img, "Patient: John Doe, Age: 45 M", (50, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+        cv2.putText(syn_img, "Rx: Amoxicillin 500 mg po tid", (50, 250), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+        cv2.putText(syn_img, "Doctor: Dr. Sarah Smith", (50, 400), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+
+        syn_input = os.path.join(self.temp_dir, "synthetic_brightness_rx.jpg")
+        syn_output = os.path.join(self.temp_dir, "synthetic_brightness_rx_out.jpg")
+        cv2.imwrite(syn_input, syn_img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+
+        redactor = LocalImageRedactor()
+        redactor.redact(syn_input, syn_output, force_prescription=True)
+
+        self.assertTrue(os.path.exists(syn_output))
+        out_img = cv2.imread(syn_output)
+        in_img = cv2.imread(syn_input)
+
+        gray_out = cv2.cvtColor(out_img, cv2.COLOR_BGR2GRAY)
+        gray_in = cv2.resize(cv2.cvtColor(in_img, cv2.COLOR_BGR2GRAY), (gray_out.shape[1], gray_out.shape[0]))
+
+        unredacted_mask = gray_out > 10
+        self.assertGreater(np.sum(unredacted_mask), 1000)
+
+        in_median = float(np.median(gray_in[unredacted_mask]))
+        out_median = float(np.median(gray_out[unredacted_mask]))
+        in_mean = float(np.mean(gray_in[unredacted_mask]))
+        out_mean = float(np.mean(gray_out[unredacted_mask]))
+
+        median_delta = abs(out_median - in_median)
+        mean_delta = abs(out_mean - in_mean)
+
+        self.assertLessEqual(
+            median_delta, 3.0,
+            f"Unredacted median brightness shifted by {median_delta:.2f} (in: {in_median:.2f}, out: {out_median:.2f}) > 3.0 tolerance"
+        )
+        self.assertLessEqual(
+            mean_delta, 3.0,
+            f"Unredacted mean brightness shifted by {mean_delta:.2f} (in: {in_mean:.2f}, out: {out_mean:.2f}) > 3.0 tolerance"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

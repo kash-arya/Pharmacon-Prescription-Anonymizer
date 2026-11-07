@@ -199,7 +199,12 @@ class LocalImageRedactor:
                 effective_dpi = 72
 
         tmp_ocr_doc = None
-        if is_low_mem and not getattr(self, "_is_current_file_image", False):
+        if getattr(self, "_current_image_ocr_page", None) is not None:
+            search_page_ref = self._current_image_ocr_page
+            tp = search_page_ref.get_textpage_ocr(language="eng", dpi=effective_dpi, tessdata=self.tessdata_dir)
+            words = search_page_ref.get_text("words", textpage=tp)
+            full_text = search_page_ref.get_text(textpage=tp)
+        elif is_low_mem and not getattr(self, "_is_current_file_image", False):
             # Fast Pre-OCR Contrast Normalization on page raster
             pix = page.get_pixmap(dpi=effective_dpi)
             arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape((pix.height, pix.width, pix.n))
@@ -249,9 +254,9 @@ class LocalImageRedactor:
         if not is_low_mem and (len(words) < 20 or is_eu):
             all_langs = get_ocr_languages(self.tessdata_dir)
             if all_langs != "eng":
-                tp = page.get_textpage_ocr(language=all_langs, dpi=effective_dpi, tessdata=self.tessdata_dir)
-                words = page.get_text("words", textpage=tp)
-                full_text = page.get_text(textpage=tp)
+                tp = search_page_ref.get_textpage_ocr(language=all_langs, dpi=effective_dpi, tessdata=self.tessdata_dir)
+                words = search_page_ref.get_text("words", textpage=tp)
+                full_text = search_page_ref.get_text(textpage=tp)
 
         self._last_extracted_text = full_text
         self._last_extracted_words = words
@@ -1166,12 +1171,20 @@ class LocalImageRedactor:
                 new_h = max(1, int(round(cur_h * scale)))
                 img_bgr = cv2.resize(img_bgr, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
 
-            # Pre-OCR Ink Normalization on scaled working canvas
-            img_bgr = normalize_ink_contrast(img_bgr, gamma=1.6)
+            # Create pristine PDF canvas from img_bgr (un-normalized)
+            _, enc_pristine = cv2.imencode(".png", img_bgr)
+            with pymupdf.open("png", enc_pristine.tobytes()) as img_doc:
+                pdf_bytes = img_doc.convert_to_pdf()
+            del enc_pristine
+            doc = pymupdf.open("pdf", pdf_bytes)
+            page = doc[0]
+
+            # Decoupled Pre-OCR Ink Normalization on a separate scratch canvas solely for OCR
+            ocr_scratch = normalize_ink_contrast(img_bgr.copy(), gamma=1.6)
+            del img_bgr
 
             if is_low_mem:
-                # Fast Pre-OCR Contrast Normalization (uint8-only via cv2.divide):
-                lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
+                lab = cv2.cvtColor(ocr_scratch, cv2.COLOR_BGR2LAB)
                 l, a, b = cv2.split(lab)
                 kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (41, 41))
                 bg = cv2.morphologyEx(l, cv2.MORPH_CLOSE, kernel)
@@ -1180,22 +1193,25 @@ class LocalImageRedactor:
                 cl = clahe.apply(norm_l)
                 lab = cv2.merge((cl, a, b))
                 proc_bgr = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
-                del lab, l, a, b, cl, kernel, bg, norm_l
-
-                _, enc = cv2.imencode(".png", proc_bgr)
-                with pymupdf.open("png", enc.tobytes()) as img_doc:
-                    pdf_bytes = img_doc.convert_to_pdf()
-                del enc, proc_bgr, img_bgr
+                del lab, l, a, b, cl, kernel, bg, norm_l, ocr_scratch
             else:
-                _, enc = cv2.imencode(".png", img_bgr)
-                with pymupdf.open("png", enc.tobytes()) as img_doc:
-                    pdf_bytes = img_doc.convert_to_pdf()
-                del enc, img_bgr
-            doc = pymupdf.open("pdf", pdf_bytes)
-            page = doc[0]
+                proc_bgr = ocr_scratch
+
+            _, enc_ocr = cv2.imencode(".png", proc_bgr)
+            del proc_bgr
+            with pymupdf.open("png", enc_ocr.tobytes()) as img_doc:
+                ocr_pdf_bytes = img_doc.convert_to_pdf()
+            del enc_ocr
+            ocr_doc = pymupdf.open("pdf", ocr_pdf_bytes)
+            self._current_image_ocr_page = ocr_doc[0]
 
             # 1. OCR, form parsing, and visual grounder targets
-            targets = self.find_pii_targets_for_page(page, 1)
+            try:
+                targets = self.find_pii_targets_for_page(page, 1)
+            finally:
+                self._current_image_ocr_page = None
+                ocr_doc.close()
+                del ocr_doc
 
             # Resolve jurisdiction using actual extracted OCR text
             ocr_text = getattr(self, "_last_extracted_text", "") or page.get_text()
