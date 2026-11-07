@@ -946,6 +946,36 @@ class TestPrescriptionAnonymizer(unittest.TestCase):
         ok, _ = qd.detect(out_cv)
         self.assertFalse(ok, "Sanitized output must obscure QR code so it is non-scannable")
 
+    def test_prescription_00046_and_00027_clinical_preservation(self):
+        """FIX 5: Separate verification checks that medicine tokens survive and PII remains masked."""
+        from src.image_redactor import LocalImageRedactor
+
+        red = LocalImageRedactor()
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "raw_public_slips"))
+
+        # 1. prescription_00046.png: Ciprofloxacin / Hydrochlorothiazide survive; patient and doctor masked
+        p46 = os.path.join(base_dir, "prescription_00046.png")
+        if os.path.exists(p46):
+            out46 = os.path.join(self.temp_dir, "out_00046.png")
+            rep46 = red.redact(p46, out46, force_prescription=True)
+            patient_targets = [t for t in rep46.get("redacted_targets", []) if t.get("category", "").startswith("PATIENT_NAME")]
+            self.assertGreaterEqual(len(patient_targets), 1, "Patient name must be redacted")
+
+            # Ensure medicine line Coprtlinacin is NOT redacted
+            for t in rep46.get("redacted_targets", []):
+                txt = str(t.get("raw_text", ""))
+                self.assertNotIn("coprtlinacin", txt.lower(), "Medication Coprtlinacin must not be redacted")
+
+        # 2. prescription_00027.png: Acetaminophen survives; doctor and address masked
+        p27 = os.path.join(base_dir, "prescription_00027.png")
+        if os.path.exists(p27):
+            out27 = os.path.join(self.temp_dir, "out_00027.png")
+            rep27 = red.redact(p27, out27, force_prescription=True)
+            for t in rep27.get("redacted_targets", []):
+                txt = str(t.get("raw_text", ""))
+                self.assertNotIn("actariseghen", txt.lower(), "Medication Acetaminophen must not be redacted")
+                self.assertNotIn("acetaminophen", txt.lower(), "Medication Acetaminophen must not be redacted")
+
 
 if __name__ == "__main__":
     unittest.main()

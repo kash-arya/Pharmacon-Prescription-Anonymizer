@@ -830,6 +830,10 @@ class LocalImageRedactor:
             r"\b(?:Street|St|Road|Rd|Avenue|Ave|Drive|Dr|Way|Lane|Ln|Boulevard|Blvd|Court|Ct|Straße|Str|Weg|Platz|Allee|Gasse|Rue|Bd|Calle|Paseo|Via|Postcode|SYDNEY|Sydney|Melbourne|Brisbane|Perth|Adelaide)\b",
             re.IGNORECASE
         )
+        dose_exclusion_re = re.compile(
+            r"\b(?:\d+(?:\.\d+)?\s*(?:mg|mcg|ml|g|gm|tab|cap|tabs|caps|tablets?|capsules?|syrup|drops?|my|mp|mgs|iu)|tablet|capsule|syrup|drops)\b",
+            re.IGNORECASE
+        )
         for pt in patient_name_targets:
             curr_y1 = pt.bbox.y1
             curr_x0 = pt.bbox.x0
@@ -842,7 +846,7 @@ class LocalImageRedactor:
                         if clinical_y0 is not None and l["rect"].y1 > clinical_y0:
                             continue
                         l_text = l["text"].strip()
-                        if self.is_whitelisted(l_text) or len(l_text) < 3:
+                        if self.is_whitelisted(l_text) or len(l_text) < 3 or dose_exclusion_re.search(l_text):
                             continue
                         if addr_line_re.search(l_text) or street_keyword_re.search(l_text) or re.search(r"\b\d{4,6}\b", l_text):
                             add_target(l["rect"], "ADDRESS_BLOCK", l_text, engine="patient_name_adjacent_address")

@@ -465,7 +465,14 @@ def parse_form_anchors_on_lines(
                         if col_words:
                             col_txt = " ".join(w[1] for w in col_words)
                             clean_col = re.sub(r"[-_=~a.,\s—|]", "", col_txt).strip()
-                            if re.search(r"\b(?:Rx|Rp\.?|Disp\.?|Medikament|Tablette|Kapsel|Age|Sex|Gender|DOB|Date|Telefon|Phone)\b", col_txt, re.I):
+                            # Stop downward sweep at clinical barrier, dosage token, or clinical whitelist using word boundaries
+                            if (
+                                re.search(r"\b(?:Rx|Rp\.?|Disp\.?|Medikament|Tablette|Kapsel|Age|Sex|Gender|DOB|Date|Telefon|Phone|Medications?|Prescription|Diagnosis|Advice|Clinical|History|Investigation|Finding)\b", col_txt, re.I)
+                                or re.search(r"\b(?:\d+(?:\.\d+)?\s*(?:mg|ml|mcg|my|mp|g|gm|tab|cap|tabs|caps|tablets?|capsules?|syrup|drops?|mgs|iu)|Tablet|Capsule|Syrup|Suspension|Drops)\b", col_txt, re.I)
+                                or check_whitelist(col_txt)
+                                or re.search(r"\b(?:\d+(?:\.\d+)?\s*(?:mg|ml|mcg|my|mp|g|gm|tab|cap|tabs|caps|tablets?|capsules?|syrup|drops?|mgs|iu)|Tablet|Capsule|Syrup|Suspension|Drops)\b", nxt_l["text"], re.I)
+                                or check_whitelist(nxt_l["text"])
+                            ):
                                 break
                             if clean_col and not check_whitelist(col_txt) and not re.match(r"^(?:oe|—|_|-|~|aaa)+$", clean_col, re.I):
                                 if is_multi_row and abs(col_words[0][0].x0 - name_x0) > 35 and a_cat in ("PATIENT_NAME", "ADDRESS"):

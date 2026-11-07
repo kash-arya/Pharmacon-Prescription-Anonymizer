@@ -315,11 +315,11 @@ DATE_ANCHORS = [
 CLINICAL_WHITELIST_PATTERNS = [
     # German/EU/US clinical & prescription terms
     r"\b(?:Medikament|Medikamente|Tabl\.?|Tablette|Tabletten|Kapsel|Kapseln|tägl\.?|täglich|Gültig\s+bis|Gebührenfrei|Aut\s+idem|Disp\.?|Sig\.?|Generic|gt|gtt|drops|eye\s+infection|taper|SHAKE|Acne|Supply|Quantity|Pack|Endorsement|Directions|Take|Inhal|Expiration|Opening|Qty|Dispensed|Rp\.?)\b",
-    r"\b\d+(?:\.\d+)?\s*(?:g|mg|ml|mcg)\b",
+    r"\b\d+(?:\.\d+)?\s*(?:g|mg|ml|mcg|my|mp|mgs|iu)\b",
     # General morphological medical / pharmacology suffixes (covers thousands of FDA/EMA drugs)
     r"\b[A-Za-z]{3,}(?:cillin|mycin|prazole|sartan|dipine|statin|olol|pril|zole|mab|nib|tide|profen|parin|glitazone|gliptin|floxacin|cycline|zodone|pam|lam|sone|olone|vir|triptan|setron|caine|dronate|mide|zide)\b",
     # Specific clinical drug substances & reference agents
-    r"\b(?:Prednisone|Lialda|Omeprazole|Telmisartan|Amlodipine|Paracetamol|Triptans|Ibuprofen|Metformin|Amoxicillin|Azithromycin|Pantoprazole|Cefixime|Lipitor|Atorvastatin|Lisinopril|Salbutamol|Esomeprazole|Metoprolol|Metoprolol\s+Tartrate|Ramipril|Pantoprazol|Glimepiride|Rosuvastatin)\b",
+    r"\b(?:Acetaminophen|Prednisone|Lialda|Omeprazole|Telmisartan|Amlodipine|Paracetamol|Triptans|Ibuprofen|Metformin|Amoxicillin|Azithromycin|Pantoprazole|Cefixime|Lipitor|Atorvastatin|Lisinopril|Salbutamol|Esomeprazole|Metoprolol|Metoprolol\s+Tartrate|Ramipril|Pantoprazol|Glimepiride|Rosuvastatin)\b",
     # Dosage units and pharmaceutical forms
     r"\b(?:mg|mcg|micrograms|ml|gm|gram|tablet|tablets|tab|tabs|capsule|capsules|cap|caps|syrup|syp|suspension|drops|injection|inj|ointment|gel|cream|patch|inhaler)\b",
     # Administration instructions and clinical frequencies
