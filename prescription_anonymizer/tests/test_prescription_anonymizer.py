@@ -976,6 +976,65 @@ class TestPrescriptionAnonymizer(unittest.TestCase):
                 self.assertNotIn("actariseghen", txt.lower(), "Medication Acetaminophen must not be redacted")
                 self.assertNotIn("acetaminophen", txt.lower(), "Medication Acetaminophen must not be redacted")
 
+    def test_address_dosage_precedence_and_staff_attribution(self):
+        """ISSUE C1 & C3: Verify address lines with bare drug words are masked, staff attributions masked, clinical lines preserved."""
+        import cv2
+        import numpy as np
+        from src.image_redactor import LocalImageRedactor
+
+        canvas = np.full((1200, 1000, 3), 255, dtype=np.uint8)
+        cv2.putText(canvas, "APOLLO HEALTH CLINIC", (50, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
+        cv2.putText(canvas, "Dr. Robert Smith, MD", (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+        cv2.putText(canvas, "Patient Name: John Doe", (50, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+        cv2.putText(canvas, "12 Cap Road", (50, 195), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+        cv2.putText(canvas, "Patient Name: Jane Doe", (50, 260), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+        cv2.putText(canvas, "Tab Street 5", (50, 295), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+        cv2.putText(canvas, "Patient Name: Bob Taylor", (50, 360), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+        cv2.putText(canvas, "Drops Avenue 7", (50, 395), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+        cv2.putText(canvas, "Rx:", (50, 470), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
+        cv2.putText(canvas, "Tab. Paracetamol 500 mg 1-0-1", (50, 510), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+        cv2.putText(canvas, "Syrup Amoxicillin 250 mg 5 ml", (50, 550), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+        cv2.putText(canvas, "Procedure: Nerve Block", (50, 590), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+        cv2.putText(canvas, "Herbal: St. John Wort", (50, 630), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+        cv2.putText(canvas, "Typed By:- KHUSHBOO", (50, 800), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+
+        syn_in = os.path.join(self.temp_dir, "synthetic_addr_staff.png")
+        syn_out = os.path.join(self.temp_dir, "synthetic_addr_staff_out.png")
+        cv2.imwrite(syn_in, canvas)
+
+        redactor = LocalImageRedactor()
+        report = redactor.redact(syn_in, syn_out, force_prescription=True)
+        targets = report.get("redacted_targets", [])
+
+        redacted_texts = [str(t.get("raw_text", "")) for t in targets]
+        joined_texts = " ".join(redacted_texts).lower()
+
+        # 1. Address lines must be masked
+        self.assertTrue(
+            any("cap road" in t.lower() or "12 cap" in t.lower() for t in redacted_texts),
+            f"12 Cap Road must be masked. Redacted: {redacted_texts}"
+        )
+        self.assertTrue(
+            any("tab street" in t.lower() or "street 5" in t.lower() for t in redacted_texts),
+            f"Tab Street 5 must be masked. Redacted: {redacted_texts}"
+        )
+        self.assertTrue(
+            any("drops avenue" in t.lower() or "avenue 7" in t.lower() for t in redacted_texts),
+            f"Drops Avenue 7 must be masked. Redacted: {redacted_texts}"
+        )
+
+        # 2. Staff attribution must be masked
+        self.assertTrue(
+            any("khushboo" in t.lower() for t in redacted_texts),
+            f"Typed By:- KHUSHBOO must be masked. Redacted: {redacted_texts}"
+        )
+
+        # 3. Clinical preservation: medicine lines must NOT be redacted
+        self.assertNotIn("paracetamol", joined_texts, "Paracetamol must remain unmasked")
+        self.assertNotIn("amoxicillin", joined_texts, "Amoxicillin must remain unmasked")
+        self.assertNotIn("nerve block", joined_texts, "Nerve Block must remain unmasked")
+        self.assertNotIn("john wort", joined_texts, "St. John Wort must remain unmasked")
+
 
 if __name__ == "__main__":
     unittest.main()

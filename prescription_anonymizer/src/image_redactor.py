@@ -230,6 +230,7 @@ class LocalImageRedactor:
             del lab, l, a, b, cl, kernel, bg, norm_l
 
             _, enc = cv2.imencode(".png", page_bgr)
+            del page_bgr
             tmp_ocr_doc = pymupdf.open()
             tmp_ocr_page = tmp_ocr_doc.new_page(width=page.rect.width, height=page.rect.height)
             tmp_ocr_page.insert_image(page.rect, stream=enc.tobytes())
@@ -298,8 +299,23 @@ class LocalImageRedactor:
                             if letter_word_count >= 2:
                                 return False
                 return True
+            is_explicit_postal = bool(
+                re.search(r"\b(?:road|street|avenue|lane|nagar|colony|sector|marg|apartment|flat|house|plot)\b|[A-Za-zÄÖÜäöüß]*(?:straße|strasse|gasse|weg)\b", raw_text, re.I)
+                or re.search(r"\b(?:\d+[a-z/-]*\s+(?:st|rd|ave|ln|dr|fl|apt|blk)|(?:st|rd|ave|ln|apt|phase|block|floor|pin|zip)\s*[:.#-]?\s*\d+)\b", raw_text, re.I)
+            )
+            has_numeric_dose = bool(re.search(r"\b\d+(?:\.\d+)?\s*(?:mg|ml|mcg|g|gm|iu|my|mp|mgs)\b", raw_text, re.I))
+
             if self.is_whitelisted(raw_text):
-                return False
+                if is_explicit_postal and not has_numeric_dose:
+                    non_addr = re.sub(r"\b(?:road|street|avenue|lane|nagar|colony|sector|marg|apartment|flat|house|plot)\b|[A-Za-zÄÖÜäöüß]*(?:straße|strasse|gasse|weg)\b", "", raw_text, flags=re.I)
+                    non_addr = re.sub(r"\b(?:\d+[a-z/-]*\s+(?:st|rd|ave|ln|dr|fl|apt|blk)|(?:st|rd|ave|ln|apt|phase|block|floor|pin|zip)\s*[:.#-]?\s*\d+)\b", "", non_addr, flags=re.I)
+                    non_addr = re.sub(r"\b(?:tab|tabs|tablet|tablets|cap|caps|capsule|capsules|syrup|syp|drops?|inj|injection|my|mp)\b", "", non_addr, flags=re.I)
+                    non_addr = re.sub(r"[\d.,;:()/\-]", " ", non_addr).strip()
+                    has_real_clin = bool(non_addr and any(self.is_whitelisted(w) for w in non_addr.split() if len(w) > 2))
+                    if has_real_clin:
+                        return False
+                else:
+                    return False
             rect_mid = (rect.y0 + rect.y1) / 2.0
             for wr in whitelisted_rects:
                 wr_mid = (wr.y0 + wr.y1) / 2.0
@@ -321,6 +337,17 @@ class LocalImageRedactor:
                         continue
                     elif wr.x0 - rect.x0 > 20:
                         rect.x1 = min(rect.x1, wr.x0 - 2)
+                        continue
+
+                # Step 2: Address redaction strictly overrides bare drug-form words (tab, cap, drops, syp, inj)
+                is_explicit_postal = bool(
+                    re.search(r"\b(?:road|street|avenue|lane|nagar|colony|sector|marg|apartment|flat|house|plot)\b|[A-Za-zÄÖÜäöüß]*(?:straße|strasse|gasse|weg)\b", raw_text, re.I)
+                    or re.search(r"\b(?:\d+[a-z/-]*\s+(?:st|rd|ave|ln|dr|fl|apt|blk)|(?:st|rd|ave|ln|apt|phase|block|floor|pin|zip)\s*[:.#-]?\s*\d+)\b", raw_text, re.I)
+                )
+                has_numeric_dose = bool(re.search(r"\b\d+(?:\.\d+)?\s*(?:mg|ml|mcg|g|gm|iu|my|mp|mgs)\b", raw_text, re.I))
+                if is_explicit_postal and not has_numeric_dose:
+                    wr_text = search_page_ref.get_text("text", clip=wr).strip()
+                    if re.match(r"^(?:tab|tabs|tablet|tablets|cap|caps|capsule|capsules|syrup|syp|drops?|inj|injection|my|mp)$", wr_text, re.I):
                         continue
 
                 if inter.get_area() > 0.15 * min(rect.get_area(), wr.get_area()):
@@ -825,15 +852,32 @@ class LocalImageRedactor:
         if 'line_objects_enh' in locals() and line_objects_enh:
             all_candidate_lines.extend(line_objects_enh)
 
-        addr_line_re = re.compile(r"[A-Za-zäöüß]+\s*\d+|\b\d{4,6}\s+[A-Za-zäöüß]+|\b(?:NSW|VIC|QLD|WA|SA|TAS|ACT|NT)\s+\d{4}\b", re.IGNORECASE)
+        # Step 2: Collision-Safe Address vs. Dosage Precedence
+        postal_noun_re = re.compile(
+            r"\b(?:road|street|avenue|lane|nagar|colony|sector|marg|apartment|flat|house|plot)\b|[A-Za-zÄÖÜäöüß]*(?:straße|strasse|gasse|weg)\b",
+            re.IGNORECASE
+        )
+        postal_short_re = re.compile(
+            r"\b(?:\d+[a-z/-]*\s+(?:st|rd|ave|ln|dr|fl|apt|blk)|(?:st|rd|ave|ln|apt|phase|block|floor|pin|zip)\s*[:.#-]?\s*\d+)\b",
+            re.IGNORECASE
+        )
+        numeric_dose_re = re.compile(
+            r"\b\d+(?:\.\d+)?\s*(?:mg|ml|mcg|g|gm|iu|my|mp|mgs)\b",
+            re.IGNORECASE
+        )
+        bare_drug_forms_re = re.compile(
+            r"\b(?:tab|tabs|tablet|tablets|cap|caps|capsule|capsules|syrup|syp|drops?|inj|injection)\b",
+            re.IGNORECASE
+        )
+        addr_line_re = re.compile(
+            r"[A-Za-zäöüß]+\s*\d+|\b\d{4,6}\s+[A-Za-zäöüß]+|\b(?:NSW|VIC|QLD|WA|SA|TAS|ACT|NT)\s+\d{4}\b",
+            re.IGNORECASE
+        )
         street_keyword_re = re.compile(
-            r"\b(?:Street|St|Road|Rd|Avenue|Ave|Drive|Dr|Way|Lane|Ln|Boulevard|Blvd|Court|Ct|Straße|Str|Weg|Platz|Allee|Gasse|Rue|Bd|Calle|Paseo|Via|Postcode|SYDNEY|Sydney|Melbourne|Brisbane|Perth|Adelaide)\b",
+            r"\b(?:Street|Road|Avenue|Ave|Drive|Way|Lane|Ln|Boulevard|Blvd|Court|Ct|Straße|Str|Weg|Platz|Allee|Gasse|Rue|Bd|Calle|Paseo|Via|Postcode|SYDNEY|Sydney|Melbourne|Brisbane|Perth|Adelaide)\b",
             re.IGNORECASE
         )
-        dose_exclusion_re = re.compile(
-            r"\b(?:\d+(?:\.\d+)?\s*(?:mg|mcg|ml|g|gm|tab|cap|tabs|caps|tablets?|capsules?|syrup|drops?|my|mp|mgs|iu)|tablet|capsule|syrup|drops)\b",
-            re.IGNORECASE
-        )
+
         for pt in patient_name_targets:
             curr_y1 = pt.bbox.y1
             curr_x0 = pt.bbox.x0
@@ -846,14 +890,35 @@ class LocalImageRedactor:
                         if clinical_y0 is not None and l["rect"].y1 > clinical_y0:
                             continue
                         l_text = l["text"].strip()
-                        if self.is_whitelisted(l_text) or len(l_text) < 3 or dose_exclusion_re.search(l_text):
+                        if len(l_text) < 3:
                             continue
-                        if addr_line_re.search(l_text) or street_keyword_re.search(l_text) or re.search(r"\b\d{4,6}\b", l_text):
+
+                        is_explicit_postal = bool(postal_noun_re.search(l_text) or postal_short_re.search(l_text))
+                        has_numeric_dose = bool(numeric_dose_re.search(l_text))
+
+                        if is_explicit_postal:
+                            # Explicit postal address strictly overrides bare drug-form words
+                            if has_numeric_dose:
+                                non_addr = postal_noun_re.sub("", l_text)
+                                non_addr = postal_short_re.sub("", non_addr)
+                                non_addr = bare_drug_forms_re.sub("", non_addr).strip()
+                                if len(non_addr) > 2 and self.is_whitelisted(non_addr):
+                                    continue
                             add_target(l["rect"], "ADDRESS_BLOCK", l_text, engine="patient_name_adjacent_address")
                             curr_y1 = l["rect"].y1
                             curr_x0 = l["rect"].x0
                             found_next_line = True
                             break
+                        else:
+                            # Non-explicit postal line: full clinical guard
+                            if self.is_whitelisted(l_text) or has_numeric_dose or bare_drug_forms_re.search(l_text):
+                                continue
+                            if addr_line_re.search(l_text) or street_keyword_re.search(l_text) or re.search(r"\b\d{4,6}\b", l_text):
+                                add_target(l["rect"], "ADDRESS_BLOCK", l_text, engine="patient_name_adjacent_address")
+                                curr_y1 = l["rect"].y1
+                                curr_x0 = l["rect"].x0
+                                found_next_line = True
+                                break
                 if not found_next_line:
                     break
 
@@ -1163,23 +1228,18 @@ class LocalImageRedactor:
             with Image.open(input_path) as probe:
                 orig_w, orig_h = probe.size
 
-            # Decode strategy: Full-resolution decode when under ~15 MP (safely fits in memory);
-            # PIL draft() scaling for ultra-high-resolution images (>= 15 MP)
-            total_pixels = orig_w * orig_h
-            if is_low_mem and total_pixels >= 15_000_000:
-                with Image.open(input_path) as pil_img:
-                    pil_img.draft("RGB", (orig_w // 2, orig_h // 2))
-                    img_bgr = cv2.cvtColor(np.array(pil_img.convert("RGB")), cv2.COLOR_RGB2BGR)
+            # Memory-efficient image loading without redundant full-resolution decode
+            if is_low_mem and max(orig_w, orig_h) >= 2000:
+                img_bgr = cv2.imread(input_path, cv2.IMREAD_REDUCED_COLOR_2)
+                if img_bgr is None:
+                    with Image.open(input_path) as pil_img:
+                        pil_img.draft("RGB", (orig_w // 2, orig_h // 2))
+                        img_bgr = cv2.cvtColor(np.array(pil_img.convert("RGB")), cv2.COLOR_RGB2BGR)
             else:
                 img_bgr = cv2.imread(input_path)
                 if img_bgr is None:
                     with Image.open(input_path) as pil_img:
                         img_bgr = cv2.cvtColor(np.array(pil_img.convert("RGB")), cv2.COLOR_RGB2BGR)
-
-            # High-fidelity QR and Barcode Detection on pre-downsampled canvas
-            cached_codes = detect_qr_and_barcodes(page=None, bgr=img_bgr, scale_x=1.0, scale_y=1.0)
-            self._cached_image_codes = cached_codes
-            self._cached_image_orig_dims = (img_bgr.shape[1], img_bgr.shape[0])
 
             cur_h, cur_w = img_bgr.shape[:2]
             target_max = 1350 if is_low_mem else None
@@ -1194,6 +1254,11 @@ class LocalImageRedactor:
                 new_w = max(1, int(round(cur_w * scale)))
                 new_h = max(1, int(round(cur_h * scale)))
                 img_bgr = cv2.resize(img_bgr, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+
+            # Barcode and QR Code detection directly on already-loaded pristine working canvas (<= 1800px)
+            cached_codes = detect_qr_and_barcodes(page=None, bgr=img_bgr, scale_x=1.0, scale_y=1.0)
+            self._cached_image_codes = cached_codes
+            self._cached_image_orig_dims = (img_bgr.shape[1], img_bgr.shape[0])
 
             # Create pristine PDF canvas from img_bgr (un-normalized)
             _, enc_pristine = cv2.imencode(".png", img_bgr)
@@ -1218,8 +1283,9 @@ class LocalImageRedactor:
                 lab = cv2.merge((cl, a, b))
                 proc_bgr = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
                 del lab, l, a, b, cl, kernel, bg, norm_l, ocr_scratch
-            else:
+            if not is_low_mem:
                 proc_bgr = ocr_scratch
+                del ocr_scratch
 
             _, enc_ocr = cv2.imencode(".png", proc_bgr)
             del proc_bgr
@@ -1227,6 +1293,7 @@ class LocalImageRedactor:
                 ocr_pdf_bytes = img_doc.convert_to_pdf()
             del enc_ocr
             ocr_doc = pymupdf.open("pdf", ocr_pdf_bytes)
+            del ocr_pdf_bytes
             self._current_image_ocr_page = ocr_doc[0]
 
             # 1. OCR, form parsing, and visual grounder targets

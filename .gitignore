@@ -54,6 +54,8 @@ Desktop.ini
 
 # Logs, Dumps & Scratch Directories
 *.log
+logs/
+reports/
 temp/
 tmp/
 *.tmp

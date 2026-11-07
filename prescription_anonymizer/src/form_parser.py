@@ -466,15 +466,32 @@ def parse_form_anchors_on_lines(
                             col_txt = " ".join(w[1] for w in col_words)
                             clean_col = re.sub(r"[-_=~a.,\s—|]", "", col_txt).strip()
                             # Stop downward sweep at clinical barrier, dosage token, or clinical whitelist using word boundaries
-                            if (
+                            # Step 2: Postal address override strictly overrides bare drug-form words
+                            is_col_postal = bool(
+                                re.search(r"\b(?:road|street|avenue|lane|nagar|colony|sector|marg|apartment|flat|house|plot)\b", col_txt, re.I)
+                                or re.search(r"\b(?:\d+[a-z/-]*\s+(?:st|rd|ave|ln|dr|fl|apt|blk)|(?:st|rd|ave|ln|apt|phase|block|floor|pin|zip)\s*[:.#-]?\s*\d+)\b", col_txt, re.I)
+                                or re.search(r"\b(?:road|street|avenue|lane|nagar|colony|sector|marg|apartment|flat|house|plot)\b", nxt_l["text"], re.I)
+                                or re.search(r"\b(?:\d+[a-z/-]*\s+(?:st|rd|ave|ln|dr|fl|apt|blk)|(?:st|rd|ave|ln|apt|phase|block|floor|pin|zip)\s*[:.#-]?\s*\d+)\b", nxt_l["text"], re.I)
+                            )
+                            has_num_dose = bool(
+                                re.search(r"\b\d+(?:\.\d+)?\s*(?:mg|ml|mcg|my|mp|g|gm|iu|mgs)\b", col_txt, re.I)
+                                or re.search(r"\b\d+(?:\.\d+)?\s*(?:mg|ml|mcg|my|mp|g|gm|iu|mgs)\b", nxt_l["text"], re.I)
+                            )
+                            is_clin_barrier = bool(
                                 re.search(r"\b(?:Rx|Rp\.?|Disp\.?|Medikament|Tablette|Kapsel|Age|Sex|Gender|DOB|Date|Telefon|Phone|Medications?|Prescription|Diagnosis|Advice|Clinical|History|Investigation|Finding)\b", col_txt, re.I)
-                                or re.search(r"\b(?:\d+(?:\.\d+)?\s*(?:mg|ml|mcg|my|mp|g|gm|tab|cap|tabs|caps|tablets?|capsules?|syrup|drops?|mgs|iu)|Tablet|Capsule|Syrup|Suspension|Drops)\b", col_txt, re.I)
-                                or check_whitelist(col_txt)
-                                or re.search(r"\b(?:\d+(?:\.\d+)?\s*(?:mg|ml|mcg|my|mp|g|gm|tab|cap|tabs|caps|tablets?|capsules?|syrup|drops?|mgs|iu)|Tablet|Capsule|Syrup|Suspension|Drops)\b", nxt_l["text"], re.I)
-                                or check_whitelist(nxt_l["text"])
-                            ):
+                            )
+
+                            if is_clin_barrier or has_num_dose:
                                 break
-                            if clean_col and not check_whitelist(col_txt) and not re.match(r"^(?:oe|—|_|-|~|aaa)+$", clean_col, re.I):
+                            if not (is_col_postal and a_cat in ("ADDRESS", "PATIENT_NAME")):
+                                if (
+                                    re.search(r"\b(?:Tablet|Tablets|Capsule|Capsules|Syrup|Suspension|Drops|tab|cap|syp|inj)\b", col_txt, re.I)
+                                    or check_whitelist(col_txt)
+                                    or re.search(r"\b(?:Tablet|Tablets|Capsule|Capsules|Syrup|Suspension|Drops|tab|cap|syp|inj)\b", nxt_l["text"], re.I)
+                                    or check_whitelist(nxt_l["text"])
+                                ):
+                                    break
+                            if clean_col and (not check_whitelist(col_txt) or is_col_postal) and not re.match(r"^(?:oe|—|_|-|~|aaa)+$", clean_col, re.I):
                                 if is_multi_row and abs(col_words[0][0].x0 - name_x0) > 35 and a_cat in ("PATIENT_NAME", "ADDRESS"):
                                     break
 
