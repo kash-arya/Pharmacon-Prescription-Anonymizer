@@ -766,12 +766,12 @@ class TestPrescriptionAnonymizer(unittest.TestCase):
         d.text((50, 100), "Monday: Distributed Systems (Room 301)", fill=(0, 0, 0))
         d.text((50, 150), "Tuesday: Compiler Design Lab (Lab 4)", fill=(0, 0, 0))
         d.text((50, 200), "Wednesday: Database Management (Room 204)", fill=(0, 0, 0))
-        tt_path = os.path.join(self.temp_dir, "3Q15_Timetable_SemV.png")
+        tt_path = os.path.join(self.temp_dir, "synthetic_non_prescription_timetable.png")
         tt_img.save(tt_path)
         with open(tt_path, "rb") as f:
             tt_bytes = f.read()
 
-        res_tt = client.post("/api/v1/anonymize/preview", files={"file": ("3Q15_Timetable_SemV.png", tt_bytes, "image/png")})
+        res_tt = client.post("/api/v1/anonymize/preview", files={"file": ("synthetic_non_prescription_timetable.png", tt_bytes, "image/png")})
         self.assertEqual(res_tt.status_code, 200, f"Expected 200, got {res_tt.status_code}: {res_tt.text}")
         data_tt = res_tt.json()
         self.assertEqual(data_tt.get("triage_status"), "NOT_A_PRESCRIPTION")
@@ -779,7 +779,7 @@ class TestPrescriptionAnonymizer(unittest.TestCase):
         self.assertIsNone(data_tt.get("redacted_image_base64"))
 
         # 3. Same non-prescription image with ?force_prescription=true
-        res_tt_force = client.post("/api/v1/anonymize/preview?force_prescription=true", files={"file": ("3Q15_Timetable_SemV.png", tt_bytes, "image/png")})
+        res_tt_force = client.post("/api/v1/anonymize/preview?force_prescription=true", files={"file": ("synthetic_non_prescription_timetable.png", tt_bytes, "image/png")})
         self.assertEqual(res_tt_force.status_code, 200)
         data_tt_force = res_tt_force.json()
         self.assertNotEqual(data_tt_force.get("triage_status"), "NOT_A_PRESCRIPTION")
