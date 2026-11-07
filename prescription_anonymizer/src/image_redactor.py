@@ -1272,7 +1272,21 @@ class LocalImageRedactor:
                     scale_x = orig_w / page.rect.width
                     scale_y = orig_h / page.rect.height
                 pix = page.get_pixmap(matrix=pymupdf.Matrix(scale_x, scale_y))
-                pix.save(output_path)
+                if out_ext_lower in {".jpg", ".jpeg"}:
+                    pix.pil_save(output_path, format="JPEG", quality=92)
+                elif out_ext_lower == ".png":
+                    png_bytes = pix.tobytes("png")
+                    if len(png_bytes) <= 3 * 1024 * 1024:
+                        with open(output_path, "wb") as f:
+                            f.write(png_bytes)
+                        del png_bytes
+                    else:
+                        del png_bytes
+                        pix.pil_save(output_path, format="JPEG", quality=92)
+                elif out_ext_lower == ".webp":
+                    pix.pil_save(output_path, format="WEBP", quality=92)
+                else:
+                    pix.save(output_path, jpg_quality=92)
                 del pix
             else:
                 out_doc = pymupdf.open()

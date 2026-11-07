@@ -455,17 +455,14 @@ def _build_preview_payload(
     except Exception:
         pass
 
-    if is_low_mem and ext_lower in {".jpg", ".jpeg", ".png", ".webp"}:
-        download_b64 = red_preview_b64
-    else:
-        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
-            raise RuntimeError(f"Redacted output file is missing or empty at {output_path}")
-        with open(output_path, "rb") as out_f:
-            file_bytes = out_f.read()
-        file_b64_str = base64.b64encode(file_bytes).decode("utf-8")
-        del file_bytes
-        download_b64 = f"data:{mime_type};base64,{file_b64_str}"
-        del file_b64_str
+    if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+        raise RuntimeError(f"Redacted output file is missing or empty at {output_path}")
+    with open(output_path, "rb") as out_f:
+        file_bytes = out_f.read()
+    file_b64_str = base64.b64encode(file_bytes).decode("utf-8")
+    del file_bytes
+    download_b64 = f"data:{mime_type};base64,{file_b64_str}"
+    del file_b64_str
 
     try:
         if "pymupdf" in sys.modules:
