@@ -35,14 +35,26 @@ def detect_qr_and_barcodes(
         else:
             gray = arr
             bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-        scale_x = page.rect.width / max(1.0, pix.width)
-        scale_y = page.rect.height / max(1.0, pix.height)
+        bounds_w = page.rect.width
+        bounds_h = page.rect.height
+        scale_x = bounds_w / max(1.0, pix.width)
+        scale_y = bounds_h / max(1.0, pix.height)
     else:
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        if scale_x is None:
-            scale_x = page.rect.width / max(1.0, bgr.shape[1])
-        if scale_y is None:
-            scale_y = page.rect.height / max(1.0, bgr.shape[0])
+        if page is not None:
+            bounds_w = page.rect.width
+            bounds_h = page.rect.height
+            if scale_x is None:
+                scale_x = bounds_w / max(1.0, bgr.shape[1])
+            if scale_y is None:
+                scale_y = bounds_h / max(1.0, bgr.shape[0])
+        else:
+            bounds_w = float(bgr.shape[1])
+            bounds_h = float(bgr.shape[0])
+            if scale_x is None:
+                scale_x = 1.0
+            if scale_y is None:
+                scale_y = 1.0
 
     boxes: List[Tuple[pymupdf.Rect, str]] = []
 
@@ -56,13 +68,13 @@ def detect_qr_and_barcodes(
                 pad = 12.0
                 x0 = max(0.0, float(np.min(pts[:, 0])) * scale_x - pad)
                 y0 = max(0.0, float(np.min(pts[:, 1])) * scale_y - pad)
-                x1 = min(page.rect.width, float(np.max(pts[:, 0])) * scale_x + pad)
-                y1 = min(page.rect.height, float(np.max(pts[:, 1])) * scale_y + pad)
+                x1 = min(bounds_w, float(np.max(pts[:, 0])) * scale_x + pad)
+                y1 = min(bounds_h, float(np.max(pts[:, 1])) * scale_y + pad)
                 qw = x1 - x0
                 qh = y1 - y0
-                if 20 < qw < page.rect.width * 0.40 and 20 < qh < page.rect.height * 0.40 and (0.5 <= qw / max(1.0, qh) <= 2.0):
-                    info = decoded_info[i] if i < len(decoded_info) and decoded_info[i] else "QR_CODE"
-                    boxes.append((pymupdf.Rect(x0, y0, x1, y1), info))
+                if 20 < qw < bounds_w * 0.40 and 20 < qh < bounds_h * 0.40 and (0.5 <= qw / max(1.0, qh) <= 2.0):
+                    # Never log or store decoded QR payload
+                    boxes.append((pymupdf.Rect(x0, y0, x1, y1), "QR_CODE"))
         else:
             ok_d, pts_d = qd.detect(bgr)
             if ok_d and pts_d is not None:
@@ -70,11 +82,11 @@ def detect_qr_and_barcodes(
                 pad = 12.0
                 x0 = max(0.0, float(np.min(pts_d[:, 0])) * scale_x - pad)
                 y0 = max(0.0, float(np.min(pts_d[:, 1])) * scale_y - pad)
-                x1 = min(page.rect.width, float(np.max(pts_d[:, 0])) * scale_x + pad)
-                y1 = min(page.rect.height, float(np.max(pts_d[:, 1])) * scale_y + pad)
+                x1 = min(bounds_w, float(np.max(pts_d[:, 0])) * scale_x + pad)
+                y1 = min(bounds_h, float(np.max(pts_d[:, 1])) * scale_y + pad)
                 qw = x1 - x0
                 qh = y1 - y0
-                if 20 < qw < page.rect.width * 0.40 and 20 < qh < page.rect.height * 0.40 and (0.5 <= qw / max(1.0, qh) <= 2.0):
+                if 20 < qw < bounds_w * 0.40 and 20 < qh < bounds_h * 0.40 and (0.5 <= qw / max(1.0, qh) <= 2.0):
                     boxes.append((pymupdf.Rect(x0, y0, x1, y1), "QR_CODE"))
     except Exception:
         pass
@@ -128,12 +140,12 @@ def detect_qr_and_barcodes(
             pad = 10.0
             x0 = max(0.0, float(np.min(pts[:, 0]) + off_x) * scale_x - pad)
             y0 = max(0.0, float(np.min(pts[:, 1]) + off_y) * scale_y - pad)
-            x1 = min(page.rect.width, float(np.max(pts[:, 0]) + off_x) * scale_x + pad)
-            y1 = min(page.rect.height, float(np.max(pts[:, 1]) + off_y) * scale_y + pad)
+            x1 = min(bounds_w, float(np.max(pts[:, 0]) + off_x) * scale_x + pad)
+            y1 = min(bounds_h, float(np.max(pts[:, 1]) + off_y) * scale_y + pad)
             bw = x1 - x0
             bh = y1 - y0
             # Barcode plausibility: must not exceed 22% of page height or 12% of total page area
-            if 20 < bw < page.rect.width * 0.95 and 10 < bh < page.rect.height * 0.22 and (bw * bh) < (page.rect.width * page.rect.height * 0.12):
+            if 20 < bw < bounds_w * 0.95 and 10 < bh < bounds_h * 0.22 and (bw * bh) < (bounds_w * bounds_h * 0.12):
                 rect = pymupdf.Rect(x0, y0, x1, y1)
                 is_dup = False
                 for i, (existing_rect, label) in enumerate(boxes):

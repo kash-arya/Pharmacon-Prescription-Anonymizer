@@ -432,9 +432,24 @@ class LocalImageRedactor:
             scale_px_y = page.rect.height / max(1.0, page_bgr.shape[0])
 
         # 0. Automatic QR Code and Barcode Detection
-        code_boxes = detect_qr_and_barcodes(page, bgr=page_bgr, scale_x=scale_px_x, scale_y=scale_px_y)
+        if getattr(self, "_cached_image_codes", None) is not None:
+            code_boxes = []
+            orig_cw, orig_ch = getattr(self, "_cached_image_orig_dims", (page.rect.width, page.rect.height))
+            scale_code_x = page.rect.width / max(1.0, orig_cw)
+            scale_code_y = page.rect.height / max(1.0, orig_ch)
+            for c_rect, payload in self._cached_image_codes:
+                mapped_rect = pymupdf.Rect(
+                    c_rect.x0 * scale_code_x,
+                    c_rect.y0 * scale_code_y,
+                    c_rect.x1 * scale_code_x,
+                    c_rect.y1 * scale_code_y
+                )
+                code_boxes.append((mapped_rect, "QR_CODE" if "QR" in str(payload) else "BARCODE"))
+        else:
+            code_boxes = detect_qr_and_barcodes(page, bgr=page_bgr, scale_x=scale_px_x, scale_y=scale_px_y)
+
         for c_rect, payload in code_boxes:
-            add_target(c_rect, "BARCODE_OR_QR", payload or "BARCODE_OR_QR", engine="opencv_detector")
+            add_target(c_rect, "BARCODE_OR_QR", "QR_CODE" if "QR" in str(payload) else "BARCODE", engine="opencv_detector")
 
         # Reconstruct logical visual lines
         line_objects = reconstruct_visual_lines(words)
@@ -1144,18 +1159,23 @@ class LocalImageRedactor:
             with Image.open(input_path) as probe:
                 orig_w, orig_h = probe.size
 
-            # In low-memory mode on large photos (>= 2000px), use reduced decode to cap peak allocation < 20MB
-            if is_low_mem and max(orig_w, orig_h) >= 2000:
-                img_bgr = cv2.imread(input_path, cv2.IMREAD_REDUCED_COLOR_2)
-                if img_bgr is None:
-                    with Image.open(input_path) as pil_img:
-                        pil_img.draft("RGB", (orig_w // 2, orig_h // 2))
-                        img_bgr = cv2.cvtColor(np.array(pil_img.convert("RGB")), cv2.COLOR_RGB2BGR)
+            # Decode strategy: Full-resolution decode when under ~15 MP (safely fits in memory);
+            # PIL draft() scaling for ultra-high-resolution images (>= 15 MP)
+            total_pixels = orig_w * orig_h
+            if is_low_mem and total_pixels >= 15_000_000:
+                with Image.open(input_path) as pil_img:
+                    pil_img.draft("RGB", (orig_w // 2, orig_h // 2))
+                    img_bgr = cv2.cvtColor(np.array(pil_img.convert("RGB")), cv2.COLOR_RGB2BGR)
             else:
                 img_bgr = cv2.imread(input_path)
                 if img_bgr is None:
                     with Image.open(input_path) as pil_img:
                         img_bgr = cv2.cvtColor(np.array(pil_img.convert("RGB")), cv2.COLOR_RGB2BGR)
+
+            # High-fidelity QR and Barcode Detection on pre-downsampled canvas
+            cached_codes = detect_qr_and_barcodes(page=None, bgr=img_bgr, scale_x=1.0, scale_y=1.0)
+            self._cached_image_codes = cached_codes
+            self._cached_image_orig_dims = (img_bgr.shape[1], img_bgr.shape[0])
 
             cur_h, cur_w = img_bgr.shape[:2]
             target_max = 1350 if is_low_mem else None
@@ -1210,6 +1230,8 @@ class LocalImageRedactor:
                 targets = self.find_pii_targets_for_page(page, 1)
             finally:
                 self._current_image_ocr_page = None
+                self._cached_image_codes = None
+                self._cached_image_orig_dims = None
                 ocr_doc.close()
                 del ocr_doc
 

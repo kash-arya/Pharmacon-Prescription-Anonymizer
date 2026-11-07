@@ -902,6 +902,50 @@ class TestPrescriptionAnonymizer(unittest.TestCase):
             f"Unredacted mean brightness shifted by {mean_delta:.2f} (in: {in_mean:.2f}, out: {out_mean:.2f}) > 3.0 tolerance"
         )
 
+    def test_synthetic_qr_code_detection_and_redaction(self):
+        """FIX 3: Verify arbitrary synthetic QR code is detected, masked, non-scannable, and payload is unlogged."""
+        import cv2
+        import numpy as np
+        from src.image_redactor import LocalImageRedactor
+
+        encoder = cv2.QRCodeEncoder.create()
+        secret_url = "https://patient-records.internal.org/rx/id-882391"
+        qr_matrix = encoder.encode(secret_url)
+        qr_vis = (qr_matrix * 255).astype(np.uint8) if qr_matrix.max() == 1 else qr_matrix
+        qr_scaled = cv2.resize(qr_vis, (140, 140), interpolation=cv2.INTER_NEAREST)
+        qr_boxed = cv2.copyMakeBorder(qr_scaled, 15, 15, 15, 15, cv2.BORDER_CONSTANT, value=255)
+
+        syn_w, syn_h = 800, 1000
+        canvas = np.full((syn_h, syn_w, 3), 255, dtype=np.uint8)
+
+        # Arbitrary placement at (x=150, y=90)
+        qx, qy = 150, 90
+        qw, qh = qr_boxed.shape[1], qr_boxed.shape[0]
+        canvas[qy:qy+qh, qx:qx+qw] = cv2.cvtColor(qr_boxed, cv2.COLOR_GRAY2BGR)
+
+        cv2.putText(canvas, "GENERAL HOSPITAL PRESCRIPTION", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
+        cv2.putText(canvas, "Patient: Alice Walker, Age: 34 F", (50, 320), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+        cv2.putText(canvas, "Rx: Ibuprofen 400 mg po tid", (50, 400), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+
+        syn_in = os.path.join(self.temp_dir, "synthetic_qr_rx.png")
+        syn_out = os.path.join(self.temp_dir, "synthetic_qr_rx_out.png")
+        cv2.imwrite(syn_in, canvas)
+
+        red = LocalImageRedactor()
+        rep = red.redact(syn_in, syn_out, force_prescription=True)
+
+        qr_targets = [t for t in rep.get("redacted_targets", []) if "QR" in t.get("category", "") or "BARCODE" in t.get("category", "")]
+        self.assertGreaterEqual(len(qr_targets), 1, "Synthetic QR code must be detected as target")
+
+        # Ensure secret payload is never stored or logged
+        for t in rep.get("redacted_targets", []):
+            self.assertNotIn(secret_url, str(t.get("raw_text", "")), "Decoded QR payload must never be logged or stored")
+
+        out_cv = cv2.imread(syn_out)
+        qd = cv2.QRCodeDetector()
+        ok, _ = qd.detect(out_cv)
+        self.assertFalse(ok, "Sanitized output must obscure QR code so it is non-scannable")
+
 
 if __name__ == "__main__":
     unittest.main()
